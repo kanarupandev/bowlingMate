@@ -26,13 +26,13 @@ st.set_page_config(page_title="BowlingMate", page_icon="🏏", layout="centered"
 st.markdown("""
 <style>
     .stApp { max-width: 800px; margin: 0 auto; }
-    .phase-good { background: #1a3a1a; border-left: 4px solid #4CAF50; padding: 12px; border-radius: 8px; margin: 8px 0; }
-    .phase-bad { background: #3a1a1a; border-left: 4px solid #f44336; padding: 12px; border-radius: 8px; margin: 8px 0; }
-    .phase-title { font-weight: bold; font-size: 1.1em; }
-    .speed-badge { background: linear-gradient(135deg, #667eea, #764ba2); color: white;
+    .phase-good { background: #f5f0e8; border-left: 4px solid #5a7247; padding: 12px; border-radius: 6px; margin: 8px 0; color: #2c2c2c; }
+    .phase-bad { background: #faf5ef; border-left: 4px solid #c4956a; padding: 12px; border-radius: 6px; margin: 8px 0; color: #2c2c2c; }
+    .phase-title { font-weight: bold; font-size: 1.05em; color: #3a3a3a; }
+    .speed-badge { background: #3b5249; color: #f5f0e8;
         padding: 8px 20px; border-radius: 20px; display: inline-block; font-size: 1.3em; font-weight: bold; }
     .metric-row { display: flex; gap: 12px; margin: 12px 0; }
-    .metric-card { flex: 1; background: #1e1e2e; padding: 12px; border-radius: 8px; text-align: center; }
+    .metric-card { flex: 1; background: #f5f0e8; padding: 12px; border-radius: 6px; text-align: center; color: #2c2c2c; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -111,8 +111,8 @@ def render_phases(phases: list):
         st.markdown(f"""
         <div class="{css_class}">
             <div class="phase-title">{icon} {phase['name']} — {phase.get('status', '')}</div>
-            <div style="margin-top:6px; color:#ccc;">{phase.get('observation', '')}</div>
-            <div style="margin-top:6px; color:#8be9fd;"><b>Tip:</b> {phase.get('tip', '')}</div>
+            <div style="margin-top:6px; color:#4a4a4a;">{phase.get('observation', '')}</div>
+            <div style="margin-top:6px; color:#5a7247;"><b>Tip:</b> {phase.get('tip', '')}</div>
         </div>
         """, unsafe_allow_html=True)
 
