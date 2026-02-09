@@ -341,16 +341,9 @@ elif st.session_state.step == "analyze":
         st.subheader("💬 Ask the Expert")
         st.caption("The Expert references specific moments in your delivery and controls video playback — powered by Gemini 3 Pro function calling.")
 
-        # Video player with seek control
-        seek_time = st.session_state.video_seek or 0
-        video_col, info_col = st.columns([2, 1])
-        with video_col:
-            st.video(st.session_state.video_bytes, start_time=int(seek_time))
-        with info_col:
-            if st.session_state.video_seek is not None and st.session_state.video_seek > 0:
-                st.markdown(f'<div style="background:#f5f0e8; padding:10px; border-radius:6px; color:#3b5249; text-align:center;">'
-                            f'<b>Focused at {st.session_state.video_seek:.1f}s</b></div>',
-                            unsafe_allow_html=True)
+        # Video action indicator
+        if st.session_state.video_seek is not None and st.session_state.video_seek > 0:
+            st.info(f"On iOS: video loops in slow-motion at {st.session_state.video_seek:.1f}s")
 
         # Chat history
         for msg in st.session_state.chat_messages:
