@@ -119,7 +119,7 @@ def render_phases(phases: list):
 
 # ── Session state init ──
 for key in ["video_bytes", "video_name", "scout_result", "analysis_result",
-            "video_id", "delivery_id", "chat_messages", "step"]:
+            "video_id", "delivery_id", "chat_messages", "step", "video_seek"]:
     if key not in st.session_state:
         st.session_state[key] = None
 if st.session_state.step is None:
@@ -307,43 +307,68 @@ elif st.session_state.step == "analyze":
 
         # ── Chat ──
         st.subheader("💬 Ask the Expert")
-        st.caption("Follow-up coaching conversation powered by Gemini 3 Pro")
+        st.caption("The Expert references specific moments in your delivery and controls video playback — powered by Gemini 3 Pro function calling.")
+
+        # Video player with seek control
+        seek_time = st.session_state.video_seek or 0
+        video_col, info_col = st.columns([2, 1])
+        with video_col:
+            st.video(st.session_state.video_bytes, start_time=int(seek_time))
+        with info_col:
+            if st.session_state.video_seek is not None and st.session_state.video_seek > 0:
+                st.markdown(f'<div style="background:#f5f0e8; padding:10px; border-radius:6px; color:#3b5249; text-align:center;">'
+                            f'<b>Focused at {st.session_state.video_seek:.1f}s</b></div>',
+                            unsafe_allow_html=True)
 
         # Chat history
         for msg in st.session_state.chat_messages:
             if msg["role"] == "user":
                 st.chat_message("user").write(msg["content"])
             else:
-                st.chat_message("assistant").write(msg["content"])
+                content = msg["content"]
+                action = msg.get("video_action")
+                with st.chat_message("assistant"):
+                    st.write(content)
+                    if action:
+                        ts = action.get("timestamp", 0)
+                        st.caption(f"Video: {action.get('action', 'focus')} at {ts:.1f}s")
 
         # Chips
-        st.markdown("**Quick questions:**")
+        st.markdown("**Ask about a specific phase:**")
         chip_cols = st.columns(2)
         for i, chip in enumerate(CHAT_CHIPS):
             col = chip_cols[i % 2]
             with col:
                 if st.button(chip, key=f"chip_{i}", use_container_width=True):
                     st.session_state.chat_messages.append({"role": "user", "content": chip})
-                    with st.spinner("Expert thinking..."):
-                        try:
-                            chat_resp = call_chat(chip, st.session_state.delivery_id, phases)
-                            reply = chat_resp.get("text", "Sorry, I couldn't generate a response.")
-                            st.session_state.chat_messages.append({"role": "assistant", "content": reply})
-                        except Exception as e:
-                            st.session_state.chat_messages.append({"role": "assistant", "content": f"Error: {e}"})
+                    try:
+                        chat_resp = call_chat(chip, st.session_state.delivery_id, phases)
+                        reply = chat_resp.get("text", "Sorry, I couldn't generate a response.")
+                        video_action = chat_resp.get("video_action")
+                        msg = {"role": "assistant", "content": reply}
+                        if video_action:
+                            msg["video_action"] = video_action
+                            st.session_state.video_seek = video_action.get("timestamp", 0)
+                        st.session_state.chat_messages.append(msg)
+                    except Exception as e:
+                        st.session_state.chat_messages.append({"role": "assistant", "content": f"Error: {e}"})
                     st.rerun()
 
         # Free text
         user_input = st.chat_input("Ask anything about your delivery...")
         if user_input:
             st.session_state.chat_messages.append({"role": "user", "content": user_input})
-            with st.spinner("Expert thinking..."):
-                try:
-                    chat_resp = call_chat(user_input, st.session_state.delivery_id, phases)
-                    reply = chat_resp.get("text", "Sorry, I couldn't generate a response.")
-                    st.session_state.chat_messages.append({"role": "assistant", "content": reply})
-                except Exception as e:
-                    st.session_state.chat_messages.append({"role": "assistant", "content": f"Error: {e}"})
+            try:
+                chat_resp = call_chat(user_input, st.session_state.delivery_id, phases)
+                reply = chat_resp.get("text", "Sorry, I couldn't generate a response.")
+                video_action = chat_resp.get("video_action")
+                msg = {"role": "assistant", "content": reply}
+                if video_action:
+                    msg["video_action"] = video_action
+                    st.session_state.video_seek = video_action.get("timestamp", 0)
+                st.session_state.chat_messages.append(msg)
+            except Exception as e:
+                st.session_state.chat_messages.append({"role": "assistant", "content": f"Error: {e}"})
             st.rerun()
 
         st.divider()
