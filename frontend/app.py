@@ -143,6 +143,8 @@ if st.session_state.step == "upload":
             with open(SAMPLE_VIDEO_PATH, "rb") as f:
                 st.session_state.video_bytes = f.read()
             st.session_state.video_name = "sample_bowling_clip.mp4"
+            # Sample is a 3s clip with 1 known delivery — skip Scout to avoid hallucination on short clips
+            st.session_state.scout_result = {"found": True, "deliveries_detected_at_time": [1.3], "total_count": 1}
             st.session_state.step = "detect"
             st.rerun()
 
@@ -173,6 +175,14 @@ elif st.session_state.step == "detect":
         with st.spinner("🔍 Scout (Gemini 3 Flash) scanning for deliveries..."):
             try:
                 result = call_scout(st.session_state.video_bytes, st.session_state.video_name)
+                # Sanity filter: estimate max duration from file size (~200KB/s for phone video)
+                max_duration = len(st.session_state.video_bytes) / 200_000 + 5
+                timestamps = result.get("deliveries_detected_at_time", [])
+                filtered = [t for t in timestamps if t <= max_duration]
+                result["deliveries_detected_at_time"] = filtered
+                result["total_count"] = len(filtered)
+                if not filtered:
+                    result["found"] = False
                 st.session_state.scout_result = result
                 st.rerun()
             except Exception as e:
