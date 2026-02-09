@@ -1,0 +1,25 @@
+Scan this video for cricket bowling deliveries.
+
+A bowling delivery is: a person running up and throwing/bowling a ball with an overarm action.
+
+For EACH delivery you find, note the timestamp when the ball is released (arm at highest point).
+
+OUTPUT FORMAT (JSON only):
+{
+  "found": true,
+  "deliveries_detected_at_time": [6.2, 18.5, 37.1],
+  "total_count": 3
+}
+
+If no deliveries found:
+{
+  "found": false,
+  "deliveries_detected_at_time": [],
+  "total_count": 0
+}
+
+IMPORTANT:
+- Look for ANY bowling-like arm action
+- Include deliveries even if partially visible
+- Timestamps in ascending order
+- Return ALL deliveries found in the video

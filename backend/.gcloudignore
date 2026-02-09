@@ -1,0 +1,36 @@
+# Ignore video files (test data)
+*.mp4
+*.mov
+*.avi
+temp_videos/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environment
+.env
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Database (local dev)
+*.db
+*.sqlite
+
+# Docs (not needed in deployment)
+docs/
+
+# Tests (not needed in deployment)
+tests/
+
+# Git
+.git/
+.gitignore

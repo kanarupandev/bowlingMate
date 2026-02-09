@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.pyc
+venv/
+.env
+.pytest_cache/
+*.egg-info/
+.coverage
+
+# iOS
+.DS_Store
+*.swp
+DerivedData/
+*.xcuserstate
+xcuserdata/
+
+# App artifacts
+temp_videos/
+bowling.db
+*.mov
+*.log
+build_output*/
+test_output*/
+
+# IDE
+.vscode/
+.idea/
+
+# Claude / Agent (local only)
+claude_analysis/
+.claude/
+.agent/

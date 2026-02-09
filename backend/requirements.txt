@@ -1,0 +1,21 @@
+fastapi
+uvicorn
+langgraph
+langchain-google-genai
+langchain-community
+faiss-cpu
+google-generativeai
+google-cloud-storage
+python-multipart
+httpx
+pydantic-settings
+# MediaPipe for pose detection overlay
+# MUST use 0.10.21 or earlier - solutions API removed in 0.10.30+
+# See: https://github.com/google-ai-edge/mediapipe/issues/6192
+mediapipe==0.10.21
+
+# Testing
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.0.0
+

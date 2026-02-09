@@ -1,0 +1,9 @@
+venv/
+__pycache__/
+.git/
+.DS_Store
+*.pyc
+temp_videos/
+server.log
+.env
+test_video.mp4
