@@ -247,7 +247,7 @@ First build takes ~30 minutes (MediaPipe compilation). Subsequent builds ~8 min 
 | `SCOUT_MODEL` | No | `gemini-3-flash-preview` | Scout detection model |
 | `COACH_MODEL` | No | `gemini-3-pro-preview` | Expert analysis model |
 | `ENABLE_OVERLAY` | No | `true` | MediaPipe skeleton overlay |
-| `GCS_BUCKET_NAME` | No | `wellbowled-clips` | GCS bucket for clip storage |
+| `GCS_BUCKET_NAME` | No | `bowlingmate-clips` | GCS bucket for clip storage |
 | `ANALYSIS_TIMEOUT` | No | `500` | Max analysis time (seconds) |
 
 ## Tests

@@ -41,7 +41,7 @@ pytestmark = pytest.mark.skipif(SKIP_INTEGRATION, reason="Integration tests disa
 def get_auth_headers():
     """Get authentication headers matching iOS app."""
     settings = get_settings()
-    return {"X-WellBowled-Secret": settings.API_SECRET}
+    return {"Authorization": f"Bearer {settings.API_SECRET}"}
 
 
 class TestScoutDetection:

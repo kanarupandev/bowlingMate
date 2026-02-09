@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-wellBowled is a cricket bowling analysis platform: iOS app captures video → cloud AI detects deliveries and provides biomechanical coaching feedback. Built for the Gemini 3 Hackathon 2026.
+BowlingMate is a cricket bowling analysis platform: iOS app captures video, cloud AI detects deliveries and provides biomechanical coaching feedback. Built for the Gemini 3 Hackathon 2026.
 
 ## Critical Rules
 
-- **Gemini 3 models ONLY**: Scout uses `gemini-3-flash-preview`, Coach uses `gemini-3-pro-preview`. Never substitute other models.
+- **Gemini 3 models ONLY**: Scout uses `gemini-3-flash-preview`, Expert uses `gemini-3-pro-preview`. Never substitute other models.
 - **Never mock responses**: Let API calls fail naturally. No fake/stub responses.
 - **Never force push**: Other agents work on this repo. No `--force` or `-f` on push.
 - **Always rebase**: Run `git pull --rebase` before every push.
@@ -40,28 +40,19 @@ cd backend && pytest tests/ --cov --cov-report=html
 ```
 
 ### iOS (SwiftUI)
-```bash
-# Sync source of truth to Xcode project
-rm -rf /Users/kanarupan/workspace/xcodeProj/wellBowled/wellBowled/*.swift && \
-cp -R /Users/kanarupan/workspace/wellBowled/ios/wellBowled/ \
-     /Users/kanarupan/workspace/xcodeProj/wellBowled/wellBowled/
+The iOS app source lives in `ios/wellBowled/`. Import into Xcode to build and run.
 
-# Build
-xcodebuild -project /Users/kanarupan/workspace/xcodeProj/wellBowled/wellBowled.xcodeproj \
-  -scheme wellBowled -destination "platform=iOS Simulator,name=iPhone 16 Pro" build
-```
-
-## Architecture: Scout → Clipper → Coach → Overlay
+## Architecture: Scout → Clipper → Expert → Overlay
 
 ### Pipeline Flow
-1. **Scout** (Gemini 3 Flash): Video split into chunks → `POST /detect-action` → returns delivery timestamps (~7-15s per chunk)
+1. **Scout** (Gemini 3 Flash): Video split into chunks → `POST /detect-action` → returns delivery timestamps (~15s per chunk)
 2. **Clipper** (local AVFoundation): Extracts 5s clip [T-3s, T+2s] via bitstream passthrough (no re-encoding)
-3. **Coach** (Gemini 3 Pro): `POST /analyze` → `GET /stream-analysis` (SSE) → 6-phase biomechanical analysis, speed estimate, tips (~25-30s)
+3. **Expert** (Gemini 3 Pro): `POST /analyze` → `GET /stream-analysis` (SSE) → 6-phase biomechanical analysis, speed estimate, tips (~25-35s)
 4. **Overlay** (MediaPipe): Skeleton visualization with phase-based color coding → uploaded to GCS
 
 ### Backend (`/backend/`)
 - **main.py**: FastAPI app — all endpoints, auth middleware (Bearer token), CORS, in-memory video cache
-- **agent.py**: LangGraph workflow — Gemini File API upload, streaming Coach analysis, JSON parsing
+- **agent.py**: LangGraph workflow — Gemini File API upload, streaming Expert analysis, JSON parsing
 - **config.py**: Pydantic Settings — all env vars with defaults. Key toggles: `MOCK_SCOUT`, `MOCK_COACH`, `ENABLE_OVERLAY`
 - **prompts.py**: Gemini prompt templates for 6-phase biomechanical analysis
 - **storage.py**: GCS wrapper — clip upload/download, thumbnail generation via FFmpeg
@@ -74,14 +65,14 @@ xcodebuild -project /Users/kanarupan/workspace/xcodeProj/wellBowled/wellBowled.x
 - **VideoActionDetector.swift**: VisionEngine implementation — exports chunks, calls Scout, deduplicates (2.0s threshold)
 - **PassthroughClipper.swift**: Bitstream video extraction (no re-encoding)
 - **Models.swift**: `Delivery` struct with status enum (detecting → clipping → queued → analyzing → success/failed)
-- **AppConfig.swift**: Feature flags, URLs, auth token. Source of truth for `ios/wellBowled/`, synced to Xcode project for builds
+- **AppConfig.swift**: Feature flags, URLs, auth token
 
 ### Key API Endpoints
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
 | `/detect-action` | POST | Scout: detect deliveries in video chunk |
 | `/analyze` | POST | Accept video, return video_id |
-| `/stream-analysis` | GET | SSE stream of Coach analysis results |
+| `/stream-analysis` | GET | SSE stream of Expert analysis results |
 | `/upload-clip` | POST | Persist clip + thumbnail to GCS |
 | `/media/video/{id}` | GET | Stream video from GCS |
 | `/debug-gemini` | GET | Smoke test Gemini API key |
@@ -89,20 +80,21 @@ xcodebuild -project /Users/kanarupan/workspace/xcodeProj/wellBowled/wellBowled.x
 ## Environment Variables (backend/.env)
 ```
 GOOGLE_API_KEY=...                    # Required: Gemini API key
-API_SECRET=wellbowled-hackathon-secret
+API_SECRET=bowlingmate-hackathon-secret
 GEMINI_MODEL_NAME=gemini-3-pro-preview
 SCOUT_MODEL=gemini-3-flash-preview
-MOCK_SCOUT=true                       # Set false for real detection
-MOCK_COACH=true                       # Set false for real analysis
-ENABLE_OVERLAY=false                  # MediaPipe skeleton (adds ~25min to Docker build)
-GCS_BUCKET_NAME=wellbowled-clips
+MOCK_SCOUT=false                      # Set true to use mock detection
+MOCK_COACH=false                      # Set true to use mock analysis
+ENABLE_OVERLAY=true                   # MediaPipe skeleton overlay
+GCS_BUCKET_NAME=bowlingmate-clips
 ANALYSIS_TIMEOUT=500
 ```
 
 ## Deployment
-- **Cloud Run**: `wellbowled` service in `us-central1`, 2GB RAM / 2 CPU, port 8080
-- **CI/CD**: GitHub Actions on push to `main` touching `backend/**` — OIDC auth, 1-hour Cloud Build timeout (MediaPipe is heavy)
-- **URL**: `https://wellbowled-506790672773.us-central1.run.app`
+- **Cloud Run**: `bowlingmate` service in `us-central1`, 2GB RAM / 2 CPU, port 8080
+- **CI/CD**: GitHub Actions on push to `main` touching `backend/**` — 1-hour Cloud Build timeout (MediaPipe is heavy)
+- **URL**: `https://bowlingmate-m4xzkste5q-uc.a.run.app`
+- **GCP Project**: `analog-reef-486909-s0`
 
 ## Commit Convention
 ```

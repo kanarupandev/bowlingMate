@@ -57,7 +57,7 @@ async def verify_authentication(request: Request, call_next):
 
     # Try Bearer token first, then fall back to legacy header
     auth_header = request.headers.get("Authorization")
-    legacy_secret = request.headers.get("X-WellBowled-Secret")
+    legacy_secret = request.headers.get("X-BowlingMate-Secret") or request.headers.get("X-WellBowled-Secret")
 
     authenticated = False
 
@@ -68,7 +68,7 @@ async def verify_authentication(request: Request, call_next):
             authenticated = True
             logger.debug(f"✅ Bearer auth successful from {request.client.host}")
 
-    # Method 2: Legacy X-WellBowled-Secret header (backwards compatibility)
+    # Method 2: Legacy X-BowlingMate-Secret header (backwards compatibility)
     if not authenticated and legacy_secret == settings.API_SECRET:
         authenticated = True
         logger.debug(f"✅ Legacy header auth successful from {request.client.host}")
