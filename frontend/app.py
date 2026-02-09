@@ -9,6 +9,7 @@ BACKEND_URL = os.getenv("BACKEND_URL", "https://bowlingmate-m4xzkste5q-uc.a.run.
 API_SECRET = os.getenv("API_SECRET", "bowlingmate-hackathon-secret")
 HEADERS = {"Authorization": f"Bearer {API_SECRET}"}
 MAX_UPLOAD_MB = 5
+MAX_DURATION_S = 120  # 2 minutes max
 
 SAMPLE_VIDEO_PATH = os.path.join(os.path.dirname(__file__), "sample_bowling_clip.mp4")
 
@@ -147,8 +148,9 @@ if st.session_state.step == "upload":
             st.rerun()
 
     with col2:
+        st.caption("MP4, max 5MB, first 2 mins only")
         uploaded = st.file_uploader(
-            "Upload your own (MP4, max 5MB)",
+            "Upload your own",
             type=["mp4"],
             label_visibility="collapsed",
         )
