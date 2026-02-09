@@ -36,7 +36,7 @@ jobs:
           gcloud run deploy bowlingmate \
             --source ./backend \
             --region us-central1 \
-            --project bowlingmate-486909 \
+            --project analog-reef-486909-s0 \
             --allow-unauthenticated \
             --set-env-vars="GOOGLE_API_KEY=${{ secrets.GOOGLE_API_KEY }},API_SECRET=bowlingmate-hackathon-secret,GCS_BUCKET_NAME=bowlingmate-clips,GEMINI_MODEL_NAME=gemini-3-pro-preview,ANALYSIS_TIMEOUT=500,ENABLE_OVERLAY=true,MOCK_SCOUT=false,MOCK_COACH=false" \
             --min-instances=1 \
@@ -48,4 +48,4 @@ jobs:
       - name: Show deployment URL
         if: success()
         run: |
-          gcloud run services describe bowlingmate --region us-central1 --project bowlingmate-486909 --format='value(status.url)'
+          gcloud run services describe bowlingmate --region us-central1 --project analog-reef-486909-s0 --format='value(status.url)'
