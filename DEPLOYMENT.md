@@ -153,6 +153,7 @@ First build takes **~30-40 minutes** (MediaPipe compilation). Subsequent builds 
 | Region | `us-central1` |
 | GCS Bucket | `bowlingmate-clips` |
 | Service Account | `bowlingmate-backend@analog-reef-486909-s0.iam.gserviceaccount.com` |
+| Cloud Run URL | `https://bowlingmate-m4xzkste5q-uc.a.run.app` |
 | GitHub Repo | `kanarupandev/bowlingMate` |
 
 ## GitHub Secrets Required
