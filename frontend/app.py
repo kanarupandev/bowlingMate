@@ -177,12 +177,23 @@ elif st.session_state.step == "detect":
                 max_duration = len(st.session_state.video_bytes) / 200_000 + 5
                 timestamps = result.get("deliveries_detected_at_time", [])
                 filtered = [t for t in timestamps if t <= max_duration]
-                result["deliveries_detected_at_time"] = filtered
-                result["total_count"] = len(filtered)
-                if not filtered:
-                    result["found"] = False
-                st.session_state.scout_result = result
-                st.rerun()
+                # Deduplicate within +-0.5s
+                deduped = []
+                for t in sorted(filtered):
+                    if not deduped or abs(t - deduped[-1]) > 0.5:
+                        deduped.append(t)
+                # Max reasonable: 1 delivery per 3 seconds of video
+                max_reasonable = max(1, int(max_duration / 3))
+                if len(deduped) > max_reasonable:
+                    st.session_state.scout_result = {"_retry": True}
+                    st.rerun()
+                else:
+                    result["deliveries_detected_at_time"] = deduped
+                    result["total_count"] = len(deduped)
+                    if not deduped:
+                        result["found"] = False
+                    st.session_state.scout_result = result
+                    st.rerun()
             except Exception as e:
                 st.error(f"Scout failed: {e}")
                 if st.button("← Back"):
@@ -191,7 +202,18 @@ elif st.session_state.step == "detect":
                     st.rerun()
     else:
         result = st.session_state.scout_result
-        if result.get("found"):
+        if result.get("_retry"):
+            st.warning("Scout returned unexpected results. This can happen with very short clips — Gemini is non-deterministic.")
+            if st.button("Try Again", use_container_width=True):
+                st.session_state.scout_result = None
+                st.rerun()
+            if st.button("← Choose another video"):
+                for key in ["video_bytes", "video_name", "scout_result", "analysis_result",
+                            "video_id", "delivery_id", "chat_messages", "video_seek"]:
+                    st.session_state[key] = None
+                st.session_state.step = "upload"
+                st.rerun()
+        elif result.get("found"):
             timestamps = result.get("deliveries_detected_at_time", [])
             st.success(f"Found **{result['total_count']}** delivery(s) at: {', '.join(f'{t:.1f}s' for t in timestamps)}")
 
