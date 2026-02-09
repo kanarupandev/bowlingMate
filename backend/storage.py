@@ -14,12 +14,12 @@ import google.auth
 
 from config import get_settings
 
-logger = logging.getLogger("wellBowled.storage")
+logger = logging.getLogger("BowlingMate.storage")
 settings = get_settings()
 
 
 class GCSStorageService:
-    """Handles all GCS operations for wellBowled clips."""
+    """Handles all GCS operations for BowlingMate clips."""
 
     def __init__(self):
         self.bucket_name = settings.GCS_BUCKET_NAME

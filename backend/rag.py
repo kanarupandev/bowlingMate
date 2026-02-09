@@ -22,7 +22,7 @@ DOCS = [
 
 import logging
 
-logger = logging.getLogger("wellBowled.rag")
+logger = logging.getLogger("BowlingMate.rag")
 
 _vector_store = None
 

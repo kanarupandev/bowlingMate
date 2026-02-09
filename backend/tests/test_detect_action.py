@@ -14,7 +14,7 @@ from main import app
 
 client = TestClient(app)
 
-HEADERS = {"X-WellBowled-Secret": "wellbowled-hackathon-secret"}
+HEADERS = {"X-WellBowled-Secret": "bowlingmate-hackathon-secret"}
 
 
 class TestDetectActionResponseFormat:

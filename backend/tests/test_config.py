@@ -42,7 +42,7 @@ class TestSettings:
         from config import Settings
         settings = Settings()
 
-        assert settings.APP_NAME == "wellBowled"
+        assert settings.APP_NAME == "BowlingMate"
         assert settings.SCOUT_MODEL == "gemini-3-flash-preview"  # Flash for speed
         assert settings.COACH_MODEL == "gemini-3-pro-preview"    # Pro for analysis
         assert settings.SCOUT_CONFIDENCE_THRESHOLD == 0.70
@@ -69,7 +69,7 @@ class TestSettings:
         from config import Settings
         settings = Settings()
 
-        assert settings.GCS_BUCKET_NAME == "wellbowled-clips"
+        assert settings.GCS_BUCKET_NAME == "bowlingmate-clips"
         assert settings.TEMP_VIDEO_DIR == "temp_videos"
 
     def test_model_names_valid(self):
@@ -99,7 +99,7 @@ class TestSettings:
         settings = Settings()
 
         # Default value should be set
-        assert settings.API_SECRET == "wellbowled-hackathon-secret"
+        assert settings.API_SECRET == "bowlingmate-hackathon-secret"
 
     def test_debug_mode_default(self):
         """Test debug mode default."""

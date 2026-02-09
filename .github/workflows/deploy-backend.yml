@@ -33,12 +33,12 @@ jobs:
           # Increase Cloud Build timeout to 1 hour for MediaPipe builds
           gcloud config set builds/timeout 3600
 
-          gcloud run deploy wellbowled \
+          gcloud run deploy bowlingmate \
             --source ./backend \
             --region us-central1 \
-            --project gen-lang-client-0673130950 \
+            --project bowlingmate-486909 \
             --allow-unauthenticated \
-            --set-env-vars="GOOGLE_API_KEY=${{ secrets.GOOGLE_API_KEY }},API_SECRET=wellbowled-hackathon-secret,GCS_BUCKET_NAME=wellbowled-clips,GEMINI_MODEL_NAME=gemini-3-pro-preview,ANALYSIS_TIMEOUT=500,ENABLE_OVERLAY=true,MOCK_SCOUT=false,MOCK_COACH=false" \
+            --set-env-vars="GOOGLE_API_KEY=${{ secrets.GOOGLE_API_KEY }},API_SECRET=bowlingmate-hackathon-secret,GCS_BUCKET_NAME=bowlingmate-clips,GEMINI_MODEL_NAME=gemini-3-pro-preview,ANALYSIS_TIMEOUT=500,ENABLE_OVERLAY=true,MOCK_SCOUT=false,MOCK_COACH=false" \
             --min-instances=1 \
             --memory=2Gi \
             --cpu=2 \
@@ -48,4 +48,4 @@ jobs:
       - name: Show deployment URL
         if: success()
         run: |
-          gcloud run services describe wellbowled --region us-central1 --project gen-lang-client-0673130950 --format='value(status.url)'
+          gcloud run services describe bowlingmate --region us-central1 --project bowlingmate-486909 --format='value(status.url)'

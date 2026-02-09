@@ -1,17 +1,17 @@
-# wellBowled Backend Configuration
+# BowlingMate Backend Configuration
 import os
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
 
 class Settings(BaseSettings):
     # App Config
-    APP_NAME: str = "wellBowled"
+    APP_NAME: str = "BowlingMate"
     DEBUG: bool = True
     LOG_LEVEL: str = "DEBUG"
     
     # Credentials
     GOOGLE_API_KEY: str
-    API_SECRET: str = "wellbowled-hackathon-secret" # Default for dev, override in prod
+    API_SECRET: str = "bowlingmate-hackathon-secret" # Default for dev, override in prod
     
     # AI Config - Gemini 3 ONLY
     GEMINI_MODEL_NAME: str = "gemini-3-pro-preview"
@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     ENABLE_OVERLAY: bool = True
     
     # GCS Config
-    GCS_BUCKET_NAME: str = "wellbowled-clips"
+    GCS_BUCKET_NAME: str = "bowlingmate-clips"
     GCS_CREDENTIALS_PATH: str = ""  # Optional: path to service account JSON
     
     # Paths

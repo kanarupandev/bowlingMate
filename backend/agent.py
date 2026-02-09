@@ -67,7 +67,7 @@ def agent_node(state: AgentState):
     config = state.get("config", "club")
     language = state.get("language", "en")
     
-    logger = logging.getLogger("wellBowled.agent")
+    logger = logging.getLogger("BowlingMate.agent")
     logger.info(f"Agent Node Started. Video: {video_path}")
     
     settings = get_settings()
@@ -149,7 +149,7 @@ workflow.add_edge("agent", END)
 app_graph = workflow.compile()
 
 async def run_streamed_agent(video_bytes: bytes, config: str, language: str):
-    logger = logging.getLogger("wellBowled.agent")
+    logger = logging.getLogger("BowlingMate.agent")
     from prompts import get_analysis_prompt
     import google.generativeai as genai
     from google.generativeai.types import RequestOptions

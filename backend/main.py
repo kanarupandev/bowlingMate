@@ -1,4 +1,4 @@
-# wellBowled Backend - Triggered CI/CD
+# BowlingMate Backend - Triggered CI/CD
 import os
 import shutil
 import uuid
@@ -26,7 +26,7 @@ logging.basicConfig(
 )
 logging.getLogger("python_multipart").setLevel(logging.WARNING)
 
-logger = logging.getLogger("wellBowled")
+logger = logging.getLogger("BowlingMate")
 logger.setLevel(log_level)
 logger.info(f"Logging initialized at level: {settings.LOG_LEVEL}")
 
@@ -94,7 +94,7 @@ class AnalysisResponse(BaseModel):
 
 @app.get("/")
 def health_check():
-    return {"status": "ok", "service": "wellBowled-backend", "model": settings.GEMINI_MODEL_NAME}
+    return {"status": "ok", "service": "BowlingMate-backend", "model": settings.GEMINI_MODEL_NAME}
 
 @app.get("/debug-overlay")
 def debug_overlay():
@@ -260,7 +260,7 @@ async def test_overlay_stream(video_url: str = None):
         try:
             storage = get_storage_service()
             test_id = f"test_{int(time_module.time())}"
-            base_url = "https://wellbowled-506790672773.us-central1.run.app"
+            base_url = "https://bowlingmate-230175862422.us-central1.run.app"
             video_url, _ = storage.upload_clip(compressed_path, f"overlay_{test_id}", base_url=base_url)
             yield log_step("gcs_upload", "ok", f"Uploaded to {video_url}")
         except Exception as e:
@@ -418,7 +418,7 @@ async def test_overlay(file: UploadFile = File(...)):
     try:
         storage = get_storage_service()
         test_id = f"test_{int(time_module.time())}"
-        base_url = "https://wellbowled-506790672773.us-central1.run.app"
+        base_url = "https://bowlingmate-230175862422.us-central1.run.app"
         video_url, _ = storage.upload_clip(compressed_path, f"overlay_{test_id}", base_url=base_url)
         step("gcs_upload", "ok", video_url)
     except Exception as e:
@@ -670,7 +670,7 @@ def _generate_overlay_sync(video_bytes: bytes, phases_data: list) -> str:
         # Upload to GCS
         delivery_id = str(uuid.uuid4())
         storage = get_storage_service()
-        base_url = "https://wellbowled-506790672773.us-central1.run.app"
+        base_url = "https://bowlingmate-230175862422.us-central1.run.app"
         logger.info(f"[Overlay] Uploading to GCS: overlay_{delivery_id}")
         video_url, _ = storage.upload_clip(compressed_path, f"overlay_{delivery_id}", base_url=base_url)
         logger.info(f"[Overlay] Upload complete: {video_url}")
@@ -920,7 +920,7 @@ async def upload_clip(
         storage = get_storage_service()
         logger.info(f"[upload-clip] Storage service initialized, bucket: {storage.bucket_name}")
         # Use proxy URLs (streams through backend, no signed URL needed)
-        base_url = str(settings.BASE_URL) if hasattr(settings, 'BASE_URL') else "https://wellbowled-506790672773.us-central1.run.app"
+        base_url = str(settings.BASE_URL) if hasattr(settings, 'BASE_URL') else "https://bowlingmate-230175862422.us-central1.run.app"
         video_url, thumbnail_url = storage.upload_clip(file_path, delivery_id, base_url=base_url)
         logger.info(f"[upload-clip] GCS upload successful, proxy URLs generated")
         
@@ -1082,7 +1082,7 @@ async def generate_overlay(
         # Upload to GCS
         delivery_id = str(uuid.uuid4())
         storage = get_storage_service()
-        base_url = "https://wellbowled-506790672773.us-central1.run.app"
+        base_url = "https://bowlingmate-230175862422.us-central1.run.app"
         video_url, _ = storage.upload_clip(compressed_path, f"overlay_{delivery_id}", base_url=base_url)
 
         # Cleanup temp files
