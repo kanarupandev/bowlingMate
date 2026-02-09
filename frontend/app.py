@@ -143,8 +143,6 @@ if st.session_state.step == "upload":
             with open(SAMPLE_VIDEO_PATH, "rb") as f:
                 st.session_state.video_bytes = f.read()
             st.session_state.video_name = "sample_bowling_clip.mp4"
-            # Sample is a 3s clip with 1 known delivery — skip Scout to avoid hallucination on short clips
-            st.session_state.scout_result = {"found": True, "deliveries_detected_at_time": [1.3], "total_count": 1}
             st.session_state.step = "detect"
             st.rerun()
 
