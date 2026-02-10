@@ -2,6 +2,7 @@
 import streamlit as st
 import requests
 import json
+import struct
 import time
 import os
 
@@ -12,6 +13,35 @@ MAX_UPLOAD_MB = 5
 MAX_DURATION_S = 120  # 2 minutes max
 
 SAMPLE_VIDEO_PATH = os.path.join(os.path.dirname(__file__), "sample_bowling_clip.mp4")
+
+def get_mp4_duration(data: bytes) -> float:
+    """Extract duration in seconds from MP4/MOV mvhd atom. Returns 0 on failure."""
+    i = 0
+    while i < len(data) - 8:
+        size = struct.unpack('>I', data[i:i+4])[0]
+        box_type = data[i+4:i+8]
+        if size < 8:
+            break
+        if box_type == b'moov':
+            j = i + 8
+            while j < i + size - 8:
+                inner_size = struct.unpack('>I', data[j:j+4])[0]
+                inner_type = data[j+4:j+8]
+                if inner_size < 8:
+                    break
+                if inner_type == b'mvhd':
+                    version = data[j+8]
+                    if version == 0:
+                        timescale = struct.unpack('>I', data[j+20:j+24])[0]
+                        duration = struct.unpack('>I', data[j+24:j+28])[0]
+                    else:
+                        timescale = struct.unpack('>I', data[j+28:j+32])[0]
+                        duration = struct.unpack('>Q', data[j+32:j+40])[0]
+                    return duration / timescale if timescale else 0
+                j += inner_size
+        i += size
+    return 0
+
 
 CHAT_CHIPS = [
     "How can I improve my release?",
@@ -175,27 +205,23 @@ elif st.session_state.step == "detect":
         with st.spinner("🔍 Scout (Gemini 3 Flash) scanning for deliveries..."):
             try:
                 result = call_scout(st.session_state.video_bytes, st.session_state.video_name)
-                # Sanity filter: estimate max duration from file size (~200KB/s for phone video)
-                max_duration = len(st.session_state.video_bytes) / 200_000 + 5
                 timestamps = result.get("deliveries_detected_at_time", [])
-                filtered = [t for t in timestamps if t <= max_duration]
+                # Get actual video duration from MP4 header
+                video_duration = get_mp4_duration(st.session_state.video_bytes)
+                if video_duration > 0:
+                    # Filter out hallucinated timestamps beyond video length
+                    timestamps = [t for t in timestamps if t <= video_duration + 1]
                 # Deduplicate within +-0.5s
                 deduped = []
-                for t in sorted(filtered):
+                for t in sorted(timestamps):
                     if not deduped or abs(t - deduped[-1]) > 0.5:
                         deduped.append(t)
-                # Max reasonable: 1 delivery per 3 seconds of video
-                max_reasonable = max(1, int(max_duration / 3))
-                if len(deduped) > max_reasonable:
-                    st.session_state.scout_result = {"_retry": True}
-                    st.rerun()
-                else:
-                    result["deliveries_detected_at_time"] = deduped
-                    result["total_count"] = len(deduped)
-                    if not deduped:
-                        result["found"] = False
-                    st.session_state.scout_result = result
-                    st.rerun()
+                result["deliveries_detected_at_time"] = deduped
+                result["total_count"] = len(deduped)
+                if not deduped:
+                    result["found"] = False
+                st.session_state.scout_result = result
+                st.rerun()
             except Exception as e:
                 st.error(f"Scout failed: {e}")
                 if st.button("← Back"):
@@ -204,18 +230,7 @@ elif st.session_state.step == "detect":
                     st.rerun()
     else:
         result = st.session_state.scout_result
-        if result.get("_retry"):
-            st.warning("Scout returned unexpected results. This can happen with very short clips — Gemini is non-deterministic.")
-            if st.button("Try Again", use_container_width=True):
-                st.session_state.scout_result = None
-                st.rerun()
-            if st.button("← Choose another video"):
-                for key in ["video_bytes", "video_name", "scout_result", "analysis_result",
-                            "video_id", "delivery_id", "chat_messages", "video_seek"]:
-                    st.session_state[key] = None
-                st.session_state.step = "upload"
-                st.rerun()
-        elif result.get("found"):
+        if result.get("found"):
             timestamps = result.get("deliveries_detected_at_time", [])
             st.success(f"Found **{result['total_count']}** delivery(s) at: {', '.join(f'{t:.1f}s' for t in timestamps)}")
 
