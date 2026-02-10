@@ -358,7 +358,7 @@ elif st.session_state.step == "analyze":
 
         # Video action indicator
         if st.session_state.video_seek is not None and st.session_state.video_seek > 0:
-            st.info(f"On iOS: video loops in slow-motion at {st.session_state.video_seek:.1f}s")
+            st.info(f"On iOS: video loops in slow-motion at {st.session_state.video_seek:.1f}s and the expert advice is given")
 
         # Chat history
         for msg in st.session_state.chat_messages:
