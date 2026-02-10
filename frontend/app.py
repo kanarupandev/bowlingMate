@@ -419,6 +419,12 @@ elif st.session_state.step == "analyze":
             st.rerun()
 
 
+# ── Waitlist ──
+st.markdown("---")
+st.subheader("Get Early Access")
+st.markdown("Interested in AI-powered bowling analysis? Join the waitlist — we'll notify you when the app is ready.")
+st.link_button("Join the Waitlist", "https://docs.google.com/forms/d/1ti_CM6sV4BzAF5cmKxIH4bjYC0mmi8OzKZkoc3YRsRc/viewform", use_container_width=True)
+
 # ── Footer ──
 st.markdown("---")
 st.caption("BowlingMate — Gemini 3 Hackathon 2026 | [GitHub](https://github.com/kanarupandev/bowlingMate)")
