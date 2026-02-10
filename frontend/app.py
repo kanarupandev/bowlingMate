@@ -238,7 +238,7 @@ elif st.session_state.step == "detect":
             for i, ts in enumerate(timestamps):
                 with st.container():
                     st.markdown(f"**Delivery {i + 1}** — detected at {ts:.1f}s")
-                    st.video(st.session_state.video_bytes)
+                    st.video(st.session_state.video_bytes, start_time=int(ts))
                     if st.button(f"Analyze Delivery {i + 1}", key=f"analyze_{i}", use_container_width=True):
                         st.session_state.step = "analyze"
                         st.rerun()
