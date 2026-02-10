@@ -164,6 +164,12 @@ if st.session_state.chat_messages is None:
 # ══════════════════════════════════════
 st.title("🏏 BowlingMate")
 st.caption("AI-native cricket bowling analysis — powered by Gemini 3")
+st.warning("This is a live demo with severe rate limiting. If analysis fails, please try again in a minute.")
+
+# ── Demo Video ──
+with st.expander("Watch the iOS app demo to get a feel for it"):
+    st.video("https://www.youtube.com/watch?v=Gpif-vPtYTc")
+    st.caption("Full experience runs on the native iOS app — this web demo uses the same backend API.")
 
 if st.session_state.step == "upload":
     st.subheader("Select a video")
