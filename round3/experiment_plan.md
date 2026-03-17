@@ -9,26 +9,44 @@ No assumptions. Real data. Decide tech stack based on results.
 
 ## Experiment Setup
 
-### What you need
-- iPhone 15 on tripod (side-on or behind-arm)
+### Equipment
+- iPhone 15 on tripod (side-on view of pitch)
 - 2 sets of stumps at a real pitch (20.12m apart)
-- A speed gun or Fulltrack.ai as ground truth (known speed)
-- A marker at 10m (cone or tape)
-- Record the same delivery with iPhone AND get speed gun reading
+- Optional: marker at 10m (cone or tape) for extra gate
+- Optional: visible batting crease line
 
-### Recording plan
-- Record at **120fps** (iPhone slo-mo, 1080p)
-- Also record a few at **240fps** (720p) for comparison
-- Record at **60fps** and **30fps** too — see where it breaks
+### Ground Truth Method
+**Manual frame counting** — no second phone or speed gun needed.
+1. Record delivery at 120fps slo-mo (native iPhone camera)
+2. Transfer to Mac
+3. Open in QuickTime, step frame-by-frame (arrow keys)
+4. Count: release frame → stumps frame
+5. Ground truth speed = 20.12m / (frame_count / 120) × 3.6
+
+This IS the speed gun. Your eyes + frame counting = absolute truth.
+
+### Recording Instructions
+1. **Settings → Camera → Record Slo-mo → 1080p HD at 120 fps**
+2. Open Camera app → swipe to **Slo-Mo** mode
+3. Position tripod side-on, both sets of stumps visible in frame
+4. Hit record, bowl, stop
+5. Trim clip to ~5s around delivery (optional, saves transfer time)
+
+### Recording Plan
+- Record at **120fps 1080p** (primary — sweet spot of quality + temporal resolution)
+- Also record a few at **240fps 720p** for comparison
+- Record a few at **60fps** to see where it breaks
 - Aim for 10-20 deliveries across speed range:
   - 3-4 deliveries at ~40-60 kph (slow/spin)
   - 3-4 deliveries at ~70-90 kph (medium)
   - 3-4 deliveries at ~100-120 kph (fast)
   - 3-4 deliveries at ~120-130 kph (express, if available)
 
-### Data to capture per delivery
-- Video file (iPhone)
-- Ground truth speed (speed gun / Fulltrack reading)
+### Data to Capture Per Delivery
+- Video file (AirDrop to Mac)
+- Ground truth speed (manual frame count in QuickTime)
+- Release frame number (from QuickTime)
+- Arrival frame number (from QuickTime)
 - FPS used
 - Camera position (side-on / behind-arm / angle)
 - Conditions (daylight, ball colour, background)
@@ -37,114 +55,85 @@ No assumptions. Real data. Decide tech stack based on results.
 
 ## Tech Stack for Experiment
 
-### Option A: Python + OpenCV (fastest to prototype)
+### Option A: Python + OpenCV (classical CV — deterministic)
 
 ```
 python3 + opencv-python + numpy + matplotlib
 ```
 
-**Why:** Iterate fast. Read video frames, compute frame diffs, find spikes, calculate speed. Plot results. No iOS build cycle.
+**How it measures speed:**
+1. Define ROIs around each gate (stumps, crease, marker) — click on first frame
+2. Frame-by-frame: compute |frame[n] - frame[n-1]| in each ROI
+3. Ball crossing a gate creates a motion energy spike
+4. Sub-frame interpolation (parabolic fit) on each spike
+5. Speed = distance / time between spikes
+6. Cross-validate across all gate pairs
 
-**Script flow:**
-1. Load video (cv2.VideoCapture)
-2. Define ROIs for each gate (stumps, crease, marker)
-3. Frame-by-frame: compute |frame[n] - frame[n-1]| in each ROI
-4. Find motion energy spikes per ROI
-5. Sub-frame interpolation on spikes
-6. Calculate speed from all gate pairs
-7. Cross-validate
-8. Compare to ground truth
-9. Plot accuracy chart
+**Strengths:** Fully deterministic. Same video = same result. No API cost. Sub-second computation.
 
-### Option B: Python + Gemini API
+### Option B: Python + Gemini API (AI frame detection)
 
 ```
 python3 + google-genai SDK
 ```
 
-**Script flow:**
-1. Extract 3s clip around delivery
-2. Send to Gemini: "find release frame and gate crossing frames"
-3. Get frame numbers back
-4. Calculate speed (same math)
-5. Run 3 times → check consistency
-6. Compare to ground truth
+**How it measures speed:**
+1. Send 3s clip to Gemini
+2. Prompt: "find exact frame where ball leaves hand + frame where ball crosses each gate"
+3. Gemini returns frame numbers
+4. Code calculates speed = distance / (frame_diff / fps) × 3.6
+5. Run 3 times to check consistency (temperature=0)
 
-### Option C: Swift Playground / on-device
+**Strengths:** Can identify release frame visually (hard for classical CV). Handles complex scenes.
 
-Skip this for experimentation. Too slow to iterate. Use Python first, port to iOS after validation.
+### Option C: Hybrid (best of both)
 
-### Recommended: Run BOTH A and B on the same videos
+1. Gemini identifies approximate release frame (±3-5 frames)
+2. Classical CV (frame differencing) finds exact spike within that window
+3. Code calculates speed
 
-Compare:
-- Classical CV (frame differencing) accuracy vs ground truth
-- Gemini frame detection accuracy vs ground truth
-- Gemini consistency (same video, 3 runs)
-- Which approach is more reliable at each speed range
+**Strengths:** AI handles the hard visual problem, code handles precision. Deterministic final measurement.
+
+### Run ALL THREE on the same videos. Compare. Pick the winner.
 
 ---
 
-## Experiment Script (Python)
-
-### Directory structure
+## Directory Structure
 
 ```
 round3/
-├── experiment_plan.md      (this file)
-├── context.md
-├── pipeline.md
-├── speed_measurement_research.md
-├── experiments/
-│   ├── videos/             (raw iPhone videos)
-│   ├── ground_truth.csv    (delivery_id, speed_kph, fps, camera_angle)
-│   ├── frame_diff.py       (Option A: classical CV)
-│   ├── gemini_detect.py    (Option B: Gemini frame detection)
-│   ├── compare.py          (plot results, accuracy analysis)
-│   └── results/            (output charts, logs)
+├── context.md                  # Journey: R1 → R2 → R3 + comparison
+├── speed_measurement_research.md  # Technical research
+├── pipeline.md                 # Full pipeline design
+├── experiment_plan.md          # This file
+└── experiments/
+    ├── videos/                 # Raw iPhone slo-mo clips (AirDrop from phone)
+    ├── ground_truth.csv        # Manual frame counts + calculated speeds
+    ├── frame_diff.py           # Option A: classical CV
+    ├── gemini_detect.py        # Option B: Gemini frame detection
+    ├── compare.py              # Accuracy analysis + plots
+    ├── requirements.txt        # Python dependencies
+    └── results/                # Output charts, logs, JSON
 ```
 
-### ground_truth.csv format
+---
+
+## ground_truth.csv Format
 
 ```csv
-delivery_id,video_file,speed_kph,fps,camera_angle,ball_colour,notes
-d001,videos/d001_120fps.mov,95,120,side_on,red,sunny
-d002,videos/d002_120fps.mov,112,120,side_on,red,sunny
-d003,videos/d003_240fps.mov,95,240,side_on,red,sunny (same delivery as d001 different fps)
-d004,videos/d004_60fps.mov,95,60,side_on,red,sunny (same delivery at 60fps)
+delivery_id,video_file,speed_kph,fps,release_frame,arrival_frame,arrival_gate,camera_angle,ball_colour,notes
+d001,videos/d001.mov,95.2,120,241,308,stumps,side_on,red,sunny
+d002,videos/d002.mov,112.4,120,185,243,stumps,side_on,red,sunny
+d003,videos/d003.mov,95.2,240,482,616,stumps,side_on,red,same delivery as d001 at 240fps
+d004,videos/d004.mov,68.0,120,300,400,stumps,side_on,red,spin bowling
 ```
 
-### frame_diff.py — what it does
-
-1. Read video frame by frame
-2. Convert to grayscale
-3. User defines ROIs (first run: click on video to mark gate positions)
-4. For each frame: sum of absolute pixel differences in each ROI
-5. Plot motion energy over time for each ROI
-6. Find spikes (threshold = 3× noise floor)
-7. Sub-frame interpolation (parabolic fit around peak)
-8. Calculate speed from each gate pair
-9. Output: estimated speed, confidence, comparison to ground truth
-
-### gemini_detect.py — what it does
-
-1. Extract 3s clip around delivery
-2. Send to Gemini with prompt:
-   "Find the exact frame number where:
-   (a) ball leaves the bowler's hand
-   (b) ball crosses each visible marker/crease/stumps
-   Return frame numbers only."
-3. Run 3 times, check consistency
-4. Calculate speed from returned frames
-5. Output: estimated speed, frame variance, comparison to ground truth
-
-### compare.py — what it does
-
-1. Load ground truth + frame_diff results + gemini results
-2. Plot: estimated vs actual speed (scatter plot)
-3. Plot: error distribution (histogram)
-4. Plot: error by speed range (are slow balls harder than fast?)
-5. Plot: error by FPS (120 vs 240 vs 60)
-6. Summary table: mean error, max error, consistency score
+**How to fill this in:**
+1. Open video in QuickTime
+2. Use arrow keys to step frame by frame
+3. Note the release frame (ball leaves hand)
+4. Note the arrival frame (ball passes stumps/crease)
+5. Calculate: speed = distance / ((arrival - release) / fps) × 3.6
 
 ---
 
@@ -154,33 +143,60 @@ d004,videos/d004_60fps.mov,95,60,side_on,red,sunny (same delivery at 60fps)
 |--------|--------|
 | Mean absolute error | ≤2 kph |
 | Max error (95th percentile) | ≤4 kph |
-| Consistency (same video, 3 runs) | Identical result (frame diff) / ±1 frame (Gemini) |
-| Works at 120fps | Yes |
-| Works at 60fps | Bonus (not required) |
-| Speed range covered | 40-130 kph |
+| Consistency (same video, 3 runs) | Identical (frame diff) / ±1 frame (Gemini) |
+| Works at 120fps 1080p | Must |
+| Works at 60fps | Bonus |
+| Speed range | 40-130 kph |
 | Processing time per delivery | <10 seconds |
+| Cost per delivery | <$0.05 |
 
 ---
 
 ## Decision Matrix (after experiments)
 
-Based on results, pick the approach:
-
-| If... | Then... |
-|-------|---------|
-| Frame diff alone meets ±2 kph at 120fps | Use frame diff only. No Gemini needed for speed. Cheapest. |
-| Frame diff needs Gemini to find release frame | Hybrid: Gemini finds approximate frame, CV refines. |
-| Frame diff fails but Gemini is consistent | Use Gemini for frame detection + code for math. |
-| Both fail at 120fps but work at 240fps | Record at 240fps (accept 720p trade-off). |
-| Neither works reliably | Manual tap fallback as primary. Rethink approach. |
+| Result | Decision |
+|--------|----------|
+| Frame diff alone meets ±2 kph | Use frame diff only. Zero cost. Fastest. |
+| Frame diff needs help finding release | Hybrid: Gemini finds release window, CV refines. |
+| Frame diff fails, Gemini is consistent | Gemini for frames + code for math. |
+| Both fail at 120fps, work at 240fps | Record at 240fps (accept 720p). |
+| Neither works reliably | Manual tap fallback as primary. Rethink. |
 
 ---
 
-## Next Steps
+## Workflow
 
-1. Record 10-20 deliveries with known speeds (iPhone + speed gun/Fulltrack)
-2. Transfer videos to Mac
-3. Run frame_diff.py → get results
-4. Run gemini_detect.py → get results
-5. Run compare.py → decide tech stack
-6. Build the winner into the app
+```
+1. Record deliveries (iPhone slo-mo 120fps)
+     ↓
+2. AirDrop to Mac → round3/experiments/videos/
+     ↓
+3. Manual frame count in QuickTime → fill ground_truth.csv
+     ↓
+4. pip install -r requirements.txt
+     ↓
+5. python frame_diff.py videos/d001.mov --fps 120 --ground-truth 95.2
+     ↓
+6. python gemini_detect.py videos/d001.mov --fps 120 --ground-truth 95.2
+     ↓
+7. python compare.py  (after all deliveries processed)
+     ↓
+8. Review results/ → pick tech stack → build into app
+```
+
+---
+
+## After Experiments: Build Plan
+
+Once tech stack is decided, port the winning approach to iOS:
+- **If classical CV wins:** Pure on-device, CoreImage/Accelerate framework, zero API cost
+- **If Gemini wins:** 3s clip → API call → code math, ~$0.03/delivery
+- **If hybrid wins:** On-device CV + one Gemini call for release detection
+
+Then integrate into bowlingMate's existing pipeline:
+```
+Scout detects delivery → extract 3s clip → measure speed → show in <10s
+                                         → send to Expert for 6-phase analysis (parallel)
+```
+
+Speed is instant. Deep analysis streams in after.
