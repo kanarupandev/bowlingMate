@@ -32,11 +32,14 @@ except ImportError:
 app = FastAPI(title="Speed Tool")
 
 # Storage
+APP_DIR = Path(__file__).parent
+SAMPLES_DIR = APP_DIR / "samples"
 UPLOAD_DIR = Path(tempfile.mkdtemp(prefix="speed_tool_"))
 CLIPS_DIR = UPLOAD_DIR / "clips"
 FRAMES_DIR = UPLOAD_DIR / "frames"
 CLIPS_DIR.mkdir(exist_ok=True)
 FRAMES_DIR.mkdir(exist_ok=True)
+SAMPLES_DIR.mkdir(exist_ok=True)
 
 # State
 sessions = {}
@@ -259,13 +262,80 @@ async def index():
     return HTML_PAGE
 
 
+@app.get("/samples")
+async def list_samples():
+    """List all videos in samples dir (includes uploads)."""
+    videos = []
+    for f in sorted(SAMPLES_DIR.iterdir()):
+        if f.suffix.lower() in (".mov", ".mp4", ".m4v"):
+            thumb = f.with_suffix(".jpg")
+            info = get_video_info(str(f))
+            videos.append({
+                "filename": f.name,
+                "thumbnail": f"/sample-thumb/{f.stem}.jpg" if thumb.exists() else None,
+                "duration": round(info["duration"], 1),
+                "fps": info["fps"],
+                "resolution": f"{info['width']}x{info['height']}",
+            })
+    return videos
+
+
+@app.get("/sample-thumb/{name}")
+async def sample_thumbnail(name: str):
+    """Serve a sample thumbnail."""
+    path = SAMPLES_DIR / name
+    if not path.exists():
+        raise HTTPException(404)
+    return FileResponse(str(path), media_type="image/jpeg")
+
+
+@app.post("/load-sample")
+async def load_sample(filename: str):
+    """Load a sample video as if it were uploaded."""
+    video_path = str(SAMPLES_DIR / filename)
+    if not Path(video_path).exists():
+        raise HTTPException(404, "Sample not found")
+
+    info = get_video_info(video_path)
+    session_id = filename.replace(".", "_")
+
+    deliveries = await detect_deliveries_gemini(video_path, info["fps"])
+
+    sessions[session_id] = {
+        "video_path": video_path,
+        "info": info,
+        "deliveries": deliveries,
+        "clips": [],
+    }
+
+    return {
+        "session_id": session_id,
+        "info": info,
+        "deliveries": deliveries,
+        "gemini_available": GEMINI_AVAILABLE,
+    }
+
+
 @app.post("/upload")
 async def upload_video(file: UploadFile = File(...)):
-    """Upload a video, get video info + auto-detected deliveries."""
-    # Save uploaded file
-    video_path = str(UPLOAD_DIR / file.filename)
+    """Upload a video, save to samples, get video info + auto-detected deliveries."""
+    # Save to samples dir (persistent)
+    video_path = str(SAMPLES_DIR / file.filename)
     with open(video_path, "wb") as f:
         shutil.copyfileobj(file.file, f)
+
+    # Generate thumbnail
+    cap = cv2.VideoCapture(video_path)
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    cap.set(cv2.CAP_PROP_POS_FRAMES, total // 2)
+    ret, frame = cap.read()
+    if ret:
+        h, w = frame.shape[:2]
+        scale = 240 / w
+        thumb = cv2.resize(frame, (240, int(h * scale)))
+        thumb_path = str(SAMPLES_DIR / Path(file.filename).with_suffix(".jpg"))
+        cv2.imwrite(thumb_path, thumb, [cv2.IMWRITE_JPEG_QUALITY, 80])
+    cap.release()
 
     info = get_video_info(video_path)
     session_id = file.filename.replace(".", "_")
@@ -443,13 +513,28 @@ input[type="range"] {
     background: #21262d; border: 1px solid #30363d; border-radius: 3px;
     padding: 2px 6px; font-family: inherit;
 }
+
+.sample-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 12px; margin: 16px 0;
+}
+.sample-card {
+    background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+    overflow: hidden; cursor: pointer; transition: border-color 0.2s;
+}
+.sample-card:hover { border-color: #006D77; }
+.sample-card img { width: 100%; height: 120px; object-fit: cover; }
+.sample-card .meta {
+    padding: 8px; font-size: 12px; color: #8DA9C4;
+}
+.sample-card .name { color: #e6edf3; font-size: 13px; margin-bottom: 4px; }
 </style>
 </head>
 <body>
 
 <h1>Speed Tool</h1>
 
-<!-- Step 1: Upload -->
+<!-- Step 1: Upload or pick sample -->
 <div id="step-upload">
     <div class="upload-zone" onclick="document.getElementById('file-input').click()" id="drop-zone">
         <p style="font-size: 18px; margin-bottom: 8px;">Drop video here or click to upload</p>
@@ -457,6 +542,9 @@ input[type="range"] {
     </div>
     <input type="file" id="file-input" accept="video/*" onchange="uploadVideo(this.files[0])">
     <div id="upload-status"></div>
+
+    <h2>Or pick from library</h2>
+    <div class="sample-grid" id="sample-grid"></div>
 </div>
 
 <!-- Step 2: Deliveries -->
@@ -559,6 +647,51 @@ let state = {
     playTimer: null,
 };
 
+// ── Load Samples ──
+
+async function loadSamples() {
+    const res = await fetch('/samples');
+    const samples = await res.json();
+    const grid = document.getElementById('sample-grid');
+    grid.innerHTML = '';
+
+    if (samples.length === 0) {
+        grid.innerHTML = '<p style="color:#8DA9C4;font-size:14px;">No videos yet. Upload one to get started.</p>';
+        return;
+    }
+
+    samples.forEach(s => {
+        const card = document.createElement('div');
+        card.className = 'sample-card';
+        card.onclick = () => loadSample(s.filename);
+        card.innerHTML = `
+            ${s.thumbnail ? `<img src="${s.thumbnail}" alt="${s.filename}">` : '<div style="height:120px;background:#21262d;"></div>'}
+            <div class="meta">
+                <div class="name">${s.filename}</div>
+                ${s.fps}fps | ${s.duration}s | ${s.resolution}
+            </div>
+        `;
+        grid.appendChild(card);
+    });
+}
+
+async function loadSample(filename) {
+    const status = document.getElementById('upload-status');
+    status.innerHTML = '<p class="loading">Loading and analyzing...</p>';
+
+    try {
+        const res = await fetch(`/load-sample?filename=${encodeURIComponent(filename)}`, { method: 'POST' });
+        const data = await res.json();
+        handleVideoLoaded(data);
+        status.innerHTML = '';
+    } catch (err) {
+        status.innerHTML = `<p style="color:#f85149;">Error: ${err.message}</p>`;
+    }
+}
+
+// Load samples on page load
+loadSamples();
+
 // ── Upload ──
 
 async function uploadVideo(file) {
@@ -574,50 +707,52 @@ async function uploadVideo(file) {
     try {
         const res = await fetch('/upload', { method: 'POST', body: formData });
         const data = await res.json();
-
-        state.sessionId = data.session_id;
-        state.fps = data.info.fps;
-
-        // Show video info
-        const info = data.info;
-        document.getElementById('video-info').innerHTML = `
-            <span>FPS:</span> ${info.fps} &nbsp;|&nbsp;
-            <span>Frames:</span> ${info.frame_count} &nbsp;|&nbsp;
-            <span>Resolution:</span> ${info.width}×${info.height} &nbsp;|&nbsp;
-            <span>Duration:</span> ${info.duration.toFixed(1)}s &nbsp;|&nbsp;
-            <span>Gemini:</span> ${data.gemini_available ? '✓' : '✗'}
-        `;
-
-        // Show deliveries
-        const list = document.getElementById('delivery-list');
-        list.innerHTML = '';
-
-        if (data.deliveries.length > 0) {
-            data.deliveries.forEach((d, i) => {
-                const btn = document.createElement('button');
-                btn.className = 'delivery-btn';
-                const timeSec = (d.release_frame / state.fps).toFixed(2);
-                btn.textContent = `Delivery ${i + 1} — frame ${d.release_frame} (${timeSec}s)`;
-                btn.onclick = () => loadClip(d.release_frame);
-                list.appendChild(btn);
-            });
-        } else {
-            document.getElementById('delivery-status').innerHTML =
-                '<p class="info">No deliveries auto-detected. Enter release frame manually:</p>' +
-                '<div class="controls" style="margin-top:8px;">' +
-                '<input type="number" id="manual-frame" placeholder="Release frame #" ' +
-                'style="background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:6px;padding:8px 12px;font-family:inherit;width:160px;">' +
-                '<button class="delivery-btn" onclick="loadClip(parseInt(document.getElementById(\'manual-frame\').value))">Extract Clip</button>' +
-                '</div>';
-        }
-
-        document.getElementById('step-upload').classList.add('hidden');
-        document.getElementById('step-deliveries').classList.remove('hidden');
+        handleVideoLoaded(data);
         status.innerHTML = '';
-
+        // Refresh sample grid (upload is now in samples)
+        loadSamples();
     } catch (err) {
         status.innerHTML = `<p style="color:#f85149;">Error: ${err.message}</p>`;
     }
+}
+
+function handleVideoLoaded(data) {
+    state.sessionId = data.session_id;
+    state.fps = data.info.fps;
+
+    const info = data.info;
+    document.getElementById('video-info').innerHTML = `
+        <span>FPS:</span> ${info.fps} &nbsp;|&nbsp;
+        <span>Frames:</span> ${info.frame_count} &nbsp;|&nbsp;
+        <span>Resolution:</span> ${info.width}×${info.height} &nbsp;|&nbsp;
+        <span>Duration:</span> ${info.duration.toFixed(1)}s &nbsp;|&nbsp;
+        <span>Gemini:</span> ${data.gemini_available ? '✓' : '✗'}
+    `;
+
+    const list = document.getElementById('delivery-list');
+    list.innerHTML = '';
+
+    if (data.deliveries.length > 0) {
+        data.deliveries.forEach((d, i) => {
+            const btn = document.createElement('button');
+            btn.className = 'delivery-btn';
+            const timeSec = (d.release_frame / state.fps).toFixed(2);
+            btn.textContent = `Delivery ${i + 1} — frame ${d.release_frame} (${timeSec}s)`;
+            btn.onclick = () => loadClip(d.release_frame);
+            list.appendChild(btn);
+        });
+    } else {
+        document.getElementById('delivery-status').innerHTML =
+            '<p class="info">No deliveries auto-detected. Enter release frame manually:</p>' +
+            '<div class="controls" style="margin-top:8px;">' +
+            '<input type="number" id="manual-frame" placeholder="Release frame #" ' +
+            'style="background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:6px;padding:8px 12px;font-family:inherit;width:160px;">' +
+            '<button class="delivery-btn" onclick="loadClip(parseInt(document.getElementById(\'manual-frame\').value))">Extract Clip</button>' +
+            '</div>';
+    }
+
+    document.getElementById('step-upload').classList.add('hidden');
+    document.getElementById('step-deliveries').classList.remove('hidden');
 }
 
 // Drag and drop
