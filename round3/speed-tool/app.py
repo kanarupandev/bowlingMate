@@ -520,9 +520,9 @@ input[type="range"] {
     <div class="gate-select">
         <span style="color: #8DA9C4;">Gate:</span>
         <select id="gate-type" onchange="toggleCustomDistance()">
+            <option value="crease_to_far_stumps">Bowling Crease to Striker Stumps (18.90m)</option>
             <option value="full_pitch">Full Pitch — Stumps to Stumps (20.12m)</option>
             <option value="crease_to_crease">Crease to Crease (17.68m)</option>
-            <option value="crease_to_far_stumps">Bowling Crease to Striker Stumps (18.90m)</option>
             <option value="half_pitch">Half Pitch (10.06m)</option>
             <option value="marker_10m">10m Marker (10.0m)</option>
             <option value="custom">Custom Distance</option>
