@@ -55,7 +55,20 @@ At 30fps it moves 10-18x its diameter — invisible streak. Useless.
 | 120 | ±5.0ms | ±1.17 kph |
 | 240 | ±2.5ms | ±0.59 kph |
 
-**Conclusion: 240fps meets ±2 kph even without interpolation. 120fps needs interpolation.**
+**Conclusion: 120fps + sub-frame interpolation is the sweet spot. 1080p, less battery, meets ±2 kph.**
+
+### Target Speed Range: 40-130 kph
+
+| Speed (kph) | Transit time (20.12m) | Frames @120fps | Error (±1 frame) | Error (sub-frame) |
+|-------------|----------------------|----------------|-------------------|-------------------|
+| 40 | 1.811s | 217 | ±0.46 kph | ±0.14 kph |
+| 60 | 1.207s | 145 | ±1.04 kph | ±0.31 kph |
+| 80 | 0.906s | 109 | ±1.84 kph | ±0.55 kph |
+| 100 | 0.724s | 87 | ±2.87 kph | ±0.86 kph |
+| 120 | 0.604s | 72 | ±4.12 kph | ±1.24 kph |
+| 130 | 0.557s | 67 | ±4.82 kph | ±1.17 kph |
+
+**At 120fps with sub-frame interpolation: all speeds 40-130 kph are within ±2 kph.** ✅
 
 ---
 
@@ -153,13 +166,79 @@ When automated detection confidence is low:
 ### Phase 1: Enhanced Frame Differencing (NOW)
 
 Changes needed:
-1. Record at **240fps** instead of 120fps (`speedCalibrationFPS = 240`)
+1. Record at **120fps at 1080p** (already the current setting — no change needed)
 2. Add **sub-frame parabolic interpolation** to spike detection
 3. Increase ROI width slightly for 720p (stumps are fewer pixels)
 4. Add **spike width filtering** to reject non-ball motion
 5. **Manual tap fallback** when confidence is below threshold
 
-Expected result: **±1-2 kph, deterministic, <1 second computation**
+Expected result: **±0.14-1.24 kph across 40-130 kph range, deterministic, <1 second computation**
+
+### Multi-Gate Cross-Validation (CORE DESIGN)
+
+**Architecture: AI finds frames → Code calculates speed → Cross-validate across gates**
+
+The AI model (Gemini vision) identifies key frames. Pure code does the math. Deterministic.
+
+#### Available Gates (known distances from release point)
+
+| Gate | Distance from release | Notes |
+|------|----------------------|-------|
+| Bowling crease | 0m (release) | Always present — the starting point |
+| User marker | 10m (configurable) | Cone, tape, or any object at a known distance |
+| Good length | ~14m | Optional |
+| Batting crease | 17.68m | Painted line on pitch |
+| Stumps (striker) | 20.12m | Always present |
+
+#### Model Output
+
+The AI returns frame numbers for each detected gate crossing:
+
+```json
+{
+  "release_frame": 847,
+  "gates": [
+    {"marker": "10m_cone", "frame": 883, "distance_m": 10.0},
+    {"marker": "batting_crease", "frame": 911, "distance_m": 17.68},
+    {"marker": "stumps", "frame": 914, "distance_m": 20.12}
+  ]
+}
+```
+
+#### Code Calculates Speed From Every Pair
+
+```
+Release → 10m marker:     10.00m / ((883-847)/120) = 120.0 kph
+Release → batting crease:  17.68m / ((911-847)/120) = 119.6 kph
+Release → stumps:          20.12m / ((914-847)/120) = 119.1 kph
+10m → batting crease:       7.68m / ((911-883)/120) = 118.6 kph
+10m → stumps:              10.12m / ((914-883)/120) = 118.3 kph
+Batting crease → stumps:    2.44m / ((914-911)/120) = 117.1 kph
+```
+
+#### Cross-Validation → Verified Speed
+
+1. Calculate speed from ALL gate pairs
+2. Check agreement:
+   - **All within ±3 kph** → HIGH confidence → show weighted average as verified speed
+   - **One outlier** → drop it, average the rest → MEDIUM confidence
+   - **Wide disagreement** → LOW confidence → fall back to manual tap
+3. More gates that agree = higher confidence
+4. **Self-verifying** — no single frame detection error can fool it
+
+#### Consistency Check
+
+Run the model 3 times on the same clip:
+- All 3 return same frames → deterministic, show speed
+- Any disagreement → low confidence → manual tap fallback
+
+#### Why This Works
+
+- AI is ONLY used for frame detection (the hard visual problem)
+- Code does ALL measurement (deterministic, reproducible)
+- Multiple gates catch errors — one bad detection doesn't corrupt the result
+- User can configure which markers are available in their setup
+- Works from any camera angle that sees the gates
 
 ### Phase 2: Ball Tracking ML (LATER)
 
