@@ -205,7 +205,7 @@ async def detect_deliveries_gemini(video_path: str, fps: float) -> list:
 GATE_DISTANCES = {
     "full_pitch": 20.12,
     "crease_to_crease": 17.68,
-    "crease_to_stumps": 1.22,
+    "crease_to_far_stumps": 18.90,
     "half_pitch": 10.06,
     "marker_10m": 10.0,
     "custom": None,
@@ -522,7 +522,7 @@ input[type="range"] {
         <select id="gate-type" onchange="toggleCustomDistance()">
             <option value="full_pitch">Full Pitch — Stumps to Stumps (20.12m)</option>
             <option value="crease_to_crease">Crease to Crease (17.68m)</option>
-            <option value="crease_to_stumps">Crease to Stumps (1.22m)</option>
+            <option value="crease_to_far_stumps">Bowling Crease to Striker Stumps (18.90m)</option>
             <option value="half_pitch">Half Pitch (10.06m)</option>
             <option value="marker_10m">10m Marker (10.0m)</option>
             <option value="custom">Custom Distance</option>
