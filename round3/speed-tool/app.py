@@ -14,6 +14,9 @@ import shutil
 import tempfile
 import time
 from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv()
 
 import cv2
 import numpy as np
@@ -299,19 +302,18 @@ async def load_sample(filename: str):
     info = get_video_info(video_path)
     session_id = filename.replace(".", "_")
 
-    deliveries = await detect_deliveries_gemini(video_path, info["fps"])
-
+    # Skip Gemini for sample loading — user can enter frame manually
     sessions[session_id] = {
         "video_path": video_path,
         "info": info,
-        "deliveries": deliveries,
+        "deliveries": [],
         "clips": [],
     }
 
     return {
         "session_id": session_id,
         "info": info,
-        "deliveries": deliveries,
+        "deliveries": [],
         "gemini_available": GEMINI_AVAILABLE,
     }
 
@@ -340,22 +342,47 @@ async def upload_video(file: UploadFile = File(...)):
     info = get_video_info(video_path)
     session_id = file.filename.replace(".", "_")
 
-    # Auto-detect deliveries with Gemini
-    deliveries = await detect_deliveries_gemini(video_path, info["fps"])
-
     sessions[session_id] = {
         "video_path": video_path,
         "info": info,
-        "deliveries": deliveries,
+        "deliveries": [],
         "clips": [],
     }
 
     return {
         "session_id": session_id,
         "info": info,
-        "deliveries": deliveries,
+        "deliveries": [],
         "gemini_available": GEMINI_AVAILABLE,
     }
+
+
+@app.get("/video-frame/{session_id}/{frame_num}")
+async def get_video_frame(session_id: str, frame_num: int):
+    """Get a single frame from the full video."""
+    session = sessions.get(session_id)
+    if not session:
+        raise HTTPException(404, "Session not found")
+
+    # Cache frames in a session-specific dir
+    vframes_dir = FRAMES_DIR / f"full_{session_id}"
+    vframes_dir.mkdir(exist_ok=True)
+    frame_path = vframes_dir / f"{frame_num:06d}.jpg"
+
+    if not frame_path.exists():
+        cap = cv2.VideoCapture(session["video_path"])
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_num)
+        ret, frame = cap.read()
+        cap.release()
+        if not ret:
+            raise HTTPException(404, "Frame not found")
+        h, w = frame.shape[:2]
+        scale = min(640 / w, 480 / h, 1.0)
+        if scale < 1.0:
+            frame = cv2.resize(frame, (int(w * scale), int(h * scale)))
+        cv2.imwrite(str(frame_path), frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+
+    return FileResponse(str(frame_path), media_type="image/jpeg")
 
 
 @app.post("/extract-clip")
@@ -408,7 +435,7 @@ HTML_PAGE = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Speed Tool</title>
+<title>Speed Tool — Hit the stumps, get your speed</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
@@ -416,7 +443,8 @@ body {
     background: #0D1117; color: #e6edf3;
     max-width: 900px; margin: 0 auto; padding: 20px;
 }
-h1 { color: #006D77; margin-bottom: 20px; font-size: 24px; }
+h1 { color: #006D77; margin-bottom: 4px; font-size: 24px; }
+.subtitle { color: #8DA9C4; font-size: 14px; margin-bottom: 20px; }
 h2 { color: #8DA9C4; margin: 20px 0 10px; font-size: 18px; }
 
 .upload-zone {
@@ -426,21 +454,20 @@ h2 { color: #8DA9C4; margin: 20px 0 10px; font-size: 18px; }
 }
 .upload-zone:hover { border-color: #006D77; }
 .upload-zone.active { border-color: #006D77; background: #006D7710; }
-
 input[type="file"] { display: none; }
 
 .info { background: #161b22; border-radius: 8px; padding: 16px; margin: 12px 0; font-size: 14px; }
 .info span { color: #8DA9C4; }
 
-.delivery-list { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
-.delivery-btn {
+.btn {
     background: #006D77; color: white; border: none; border-radius: 6px;
     padding: 8px 16px; cursor: pointer; font-family: inherit; font-size: 14px;
 }
-.delivery-btn:hover { background: #008891; }
+.btn:hover { background: #008891; }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn.active { background: #238636; border-color: #238636; }
 
-/* Frame scrubber */
-.scrubber { margin: 20px 0; }
+.scrubber { margin: 16px 0; }
 .frame-display {
     background: #000; border-radius: 8px; overflow: hidden;
     display: flex; justify-content: center; align-items: center;
@@ -453,60 +480,50 @@ input[type="file"] { display: none; }
     border-radius: 4px; font-size: 13px; font-family: 'SF Mono', monospace;
 }
 
-.controls { display: flex; align-items: center; gap: 8px; margin: 12px 0; }
+.controls { display: flex; align-items: center; gap: 8px; margin: 10px 0; }
 .controls button {
     background: #21262d; color: #e6edf3; border: 1px solid #30363d;
     border-radius: 6px; padding: 8px 14px; cursor: pointer;
     font-family: inherit; font-size: 16px; min-width: 44px;
 }
 .controls button:hover { background: #30363d; }
-.controls button.mark {
-    background: #006D77; border-color: #006D77; color: white; font-size: 14px;
-}
-.controls button.mark:hover { background: #008891; }
-.controls button.mark.active { background: #238636; border-color: #238636; }
 
-input[type="range"] {
-    flex: 1; accent-color: #006D77; height: 6px;
-}
+input[type="range"] { flex: 1; accent-color: #006D77; height: 6px; }
 
-.marks {
-    display: flex; gap: 20px; margin: 12px 0; font-size: 14px;
-}
-.mark-display {
+.marks { display: flex; gap: 12px; margin: 12px 0; font-size: 14px; }
+.mark-box {
     background: #161b22; border-radius: 8px; padding: 12px 16px; flex: 1;
 }
-.mark-display .label { color: #8DA9C4; font-size: 12px; }
-.mark-display .value { font-size: 20px; margin-top: 4px; }
-.mark-display .value.set { color: #238636; }
+.mark-box .label { color: #8DA9C4; font-size: 12px; }
+.mark-box .value { font-size: 20px; margin-top: 4px; }
+.mark-box .value.set { color: #238636; }
 
-/* Gate selection */
-.gate-select {
-    margin: 12px 0; display: flex; gap: 8px; align-items: center;
+.distance-row {
+    display: flex; align-items: center; gap: 10px; margin: 16px 0;
+    background: #161b22; border-radius: 8px; padding: 12px 16px;
 }
-.gate-select select {
+.distance-row label { color: #8DA9C4; font-size: 13px; white-space: nowrap; }
+.distance-row input {
     background: #21262d; color: #e6edf3; border: 1px solid #30363d;
     border-radius: 6px; padding: 8px 12px; font-family: inherit;
+    font-size: 18px; width: 100px; text-align: center;
 }
-.gate-select input {
-    background: #21262d; color: #e6edf3; border: 1px solid #30363d;
-    border-radius: 6px; padding: 8px 12px; font-family: inherit; width: 100px;
-}
+.distance-row .unit { color: #8DA9C4; font-size: 14px; }
 
-/* Speed result */
 .speed-result {
     background: #006D7720; border: 2px solid #006D77; border-radius: 12px;
     padding: 24px; text-align: center; margin: 20px 0;
 }
-.speed-result .speed { font-size: 48px; font-weight: bold; color: #006D77; }
+.speed-result .speed { font-size: 56px; font-weight: bold; color: #006D77; }
+.speed-result .speed-secondary { font-size: 28px; color: #8DA9C4; margin-top: 4px; }
 .speed-result .unit { font-size: 20px; color: #8DA9C4; }
-.speed-result .detail { font-size: 14px; color: #8DA9C4; margin-top: 8px; }
+.speed-result .detail { font-size: 13px; color: #8DA9C4; margin-top: 8px; }
 
 .hidden { display: none; }
 .loading { color: #8DA9C4; font-style: italic; }
 
 .keyboard-help {
-    background: #161b22; border-radius: 8px; padding: 12px 16px;
+    background: #161b22; border-radius: 8px; padding: 10px 16px;
     font-size: 12px; color: #8DA9C4; margin: 12px 0;
 }
 .keyboard-help kbd {
@@ -524,15 +541,31 @@ input[type="range"] {
 }
 .sample-card:hover { border-color: #006D77; }
 .sample-card img { width: 100%; height: 120px; object-fit: cover; }
-.sample-card .meta {
-    padding: 8px; font-size: 12px; color: #8DA9C4;
-}
+.sample-card .meta { padding: 8px; font-size: 12px; color: #8DA9C4; }
 .sample-card .name { color: #e6edf3; font-size: 13px; margin-bottom: 4px; }
+
+.mark-buttons { display: flex; gap: 8px; margin: 10px 0; }
+.mark-buttons button {
+    flex: 1; padding: 12px; font-size: 15px; border-radius: 8px;
+    border: 2px solid; cursor: pointer; font-family: inherit; font-weight: 600;
+    transition: all 0.15s;
+}
+.mark-buttons .release-btn {
+    background: #006D7720; border-color: #006D77; color: #006D77;
+}
+.mark-buttons .release-btn:hover { background: #006D7740; }
+.mark-buttons .release-btn.active { background: #006D77; color: white; }
+.mark-buttons .stumps-btn {
+    background: #da363420; border-color: #da3634; color: #da3634;
+}
+.mark-buttons .stumps-btn:hover { background: #da363440; }
+.mark-buttons .stumps-btn.active { background: #da3634; color: white; }
 </style>
 </head>
 <body>
 
 <h1>Speed Tool</h1>
+<p class="subtitle">Hit the stumps, get your speed.</p>
 
 <!-- Step 1: Upload or pick sample -->
 <div id="step-upload">
@@ -547,89 +580,82 @@ input[type="range"] {
     <div class="sample-grid" id="sample-grid"></div>
 </div>
 
-<!-- Step 2: Deliveries -->
-<div id="step-deliveries" class="hidden">
+<!-- Step 2: Browse + measure -->
+<div id="step-browse" class="hidden">
     <div class="info" id="video-info"></div>
-    <h2>Deliveries Detected</h2>
-    <div id="delivery-list" class="delivery-list"></div>
-    <div id="delivery-status"></div>
-</div>
-
-<!-- Step 3: Frame Scrubber -->
-<div id="step-scrubber" class="hidden">
-    <h2>Scrub to Mark Frames</h2>
 
     <div class="keyboard-help">
-        <kbd>←</kbd> / <kbd>→</kbd> ±1 frame &nbsp;
-        <kbd>Shift+←</kbd> / <kbd>Shift+→</kbd> ±10 frames &nbsp;
+        <kbd>&larr;</kbd> / <kbd>&rarr;</kbd> &plusmn;1 frame &nbsp;
+        <kbd>Shift</kbd>+arrows &plusmn;10 &nbsp;
         <kbd>R</kbd> mark release &nbsp;
-        <kbd>G</kbd> mark gate &nbsp;
-        <kbd>Space</kbd> play/pause
+        <kbd>S</kbd> mark stumps hit &nbsp;
+        <kbd>Space</kbd> play/pause &nbsp;
+        <kbd>C</kbd> clear marks
     </div>
 
     <div class="scrubber">
-        <div class="frame-display" id="frame-display">
-            <img id="frame-img" src="" alt="frame">
-            <div class="frame-counter" id="frame-counter">0 / 0</div>
+        <div class="frame-display">
+            <img id="browse-img" src="" alt="frame">
+            <div class="frame-counter" id="browse-counter">0 / 0</div>
         </div>
         <div class="controls">
-            <button onclick="stepFrames(-10)" title="-10 frames">⏪</button>
-            <button onclick="stepFrames(-1)" title="-1 frame">◀</button>
-            <input type="range" id="frame-slider" min="0" max="0" value="0"
-                   oninput="seekFrame(parseInt(this.value))">
-            <button onclick="stepFrames(1)" title="+1 frame">▶</button>
-            <button onclick="stepFrames(10)" title="+10 frames">⏩</button>
+            <button onclick="browseStep(-10)">-10</button>
+            <button onclick="browseStep(-1)">&larr;</button>
+            <input type="range" id="browse-slider" min="0" max="0" value="0"
+                   oninput="browseSeek(parseInt(this.value))">
+            <button onclick="browseStep(1)">&rarr;</button>
+            <button onclick="browseStep(10)">+10</button>
         </div>
-        <div class="controls">
-            <button class="mark" id="btn-release" onclick="markRelease()">
-                Mark Release (R)
-            </button>
-            <button class="mark" id="btn-gate" onclick="markGate()">
-                Mark Gate (G)
-            </button>
-        </div>
+    </div>
+
+    <div class="mark-buttons">
+        <button class="release-btn" id="btn-release" onclick="markRelease()">
+            Mark Release (R)
+        </button>
+        <button class="stumps-btn" id="btn-stumps" onclick="markStumps()">
+            Stumps Hit! (S)
+        </button>
     </div>
 
     <div class="marks">
-        <div class="mark-display">
+        <div class="mark-box">
             <div class="label">Release Frame</div>
-            <div class="value" id="release-value">—</div>
+            <div class="value" id="release-value">&mdash;</div>
         </div>
-        <div class="mark-display">
-            <div class="label">Gate Frame</div>
-            <div class="value" id="gate-value">—</div>
+        <div class="mark-box">
+            <div class="label">Stumps Hit Frame</div>
+            <div class="value" id="stumps-value">&mdash;</div>
         </div>
-        <div class="mark-display">
-            <div class="label">Frame Diff</div>
-            <div class="value" id="diff-value">—</div>
+        <div class="mark-box">
+            <div class="label">Transit</div>
+            <div class="value" id="diff-value">&mdash;</div>
         </div>
     </div>
 
-    <div class="gate-select">
-        <span style="color: #8DA9C4;">Gate:</span>
-        <select id="gate-type" onchange="toggleCustomDistance()">
-            <option value="crease_to_far_stumps">Bowling Crease to Striker Stumps (18.90m)</option>
-            <option value="full_pitch">Full Pitch — Stumps to Stumps (20.12m)</option>
-            <option value="crease_to_crease">Crease to Crease (17.68m)</option>
-            <option value="half_pitch">Half Pitch (10.06m)</option>
-            <option value="marker_10m">10m Marker (10.0m)</option>
-            <option value="custom">Custom Distance</option>
-        </select>
-        <input type="number" id="custom-distance" class="hidden"
-               placeholder="metres" step="0.01" min="0.1">
-        <button class="mark" onclick="calcSpeed()" id="btn-calc" disabled>
+    <div class="distance-row">
+        <label>Crease to stumps:</label>
+        <input type="number" id="distance-input" value="18.90" step="0.1" min="1" max="30">
+        <span class="unit">metres</span>
+        <button class="btn" onclick="calcSpeed()" id="btn-calc" disabled>
             Calculate Speed
         </button>
     </div>
 
     <div id="speed-result" class="hidden">
         <div class="speed-result">
-            <div class="speed" id="speed-value">—</div>
-            <div class="unit" id="speed-unit">km/h</div>
-            <div class="speed" id="speed-value-mph" style="font-size:28px;color:#8DA9C4;margin-top:4px;">—</div>
-            <div class="unit" style="font-size:14px;color:#8DA9C4;">mph</div>
+            <div class="speed" id="speed-kph">&mdash;</div>
+            <div class="unit">km/h</div>
+            <div class="speed-secondary" id="speed-mph">&mdash;</div>
+            <div class="unit" style="font-size:14px;">mph</div>
             <div class="detail" id="speed-detail"></div>
         </div>
+    </div>
+
+    <div style="margin-top:20px; display:flex; gap:8px;">
+        <button class="btn" onclick="clearMarks()">Clear Marks</button>
+        <button class="btn" onclick="resetToUpload()" style="background:#21262d;border:1px solid #30363d;">
+            &larr; Back to Library
+        </button>
     </div>
 </div>
 
@@ -637,79 +663,68 @@ input[type="range"] {
 let state = {
     sessionId: null,
     fps: 120,
-    clipId: null,
     totalFrames: 0,
     currentFrame: 0,
     releaseFrame: null,
-    gateFrame: null,
-    releaseFrameInClip: null,
+    stumpsFrame: null,
     playing: false,
     playTimer: null,
 };
 
-// ── Load Samples ──
+// ── Samples ──
 
 async function loadSamples() {
-    const res = await fetch('/samples');
-    const samples = await res.json();
-    const grid = document.getElementById('sample-grid');
-    grid.innerHTML = '';
-
-    if (samples.length === 0) {
-        grid.innerHTML = '<p style="color:#8DA9C4;font-size:14px;">No videos yet. Upload one to get started.</p>';
-        return;
-    }
-
-    samples.forEach(s => {
-        const card = document.createElement('div');
-        card.className = 'sample-card';
-        card.onclick = () => loadSample(s.filename);
-        card.innerHTML = `
-            ${s.thumbnail ? `<img src="${s.thumbnail}" alt="${s.filename}">` : '<div style="height:120px;background:#21262d;"></div>'}
-            <div class="meta">
-                <div class="name">${s.filename}</div>
-                ${s.fps}fps | ${s.duration}s | ${s.resolution}
-            </div>
-        `;
-        grid.appendChild(card);
-    });
+    try {
+        const res = await fetch('/samples');
+        const samples = await res.json();
+        const grid = document.getElementById('sample-grid');
+        grid.innerHTML = '';
+        if (samples.length === 0) {
+            grid.innerHTML = '<p style="color:#8DA9C4;font-size:14px;">No videos yet. Upload one.</p>';
+            return;
+        }
+        samples.forEach(s => {
+            const card = document.createElement('div');
+            card.className = 'sample-card';
+            card.onclick = () => loadSample(s.filename);
+            card.innerHTML = `
+                ${s.thumbnail ? `<img src="${s.thumbnail}" alt="${s.filename}">` : '<div style="height:120px;background:#21262d;"></div>'}
+                <div class="meta">
+                    <div class="name">${s.filename}</div>
+                    ${s.fps}fps | ${s.duration}s | ${s.resolution}
+                </div>`;
+            grid.appendChild(card);
+        });
+    } catch (err) { console.error('Failed to load samples:', err); }
 }
 
 async function loadSample(filename) {
     const status = document.getElementById('upload-status');
-    status.innerHTML = '<p class="loading">Loading and analyzing...</p>';
-
+    status.innerHTML = '<p class="loading">Loading...</p>';
     try {
         const res = await fetch(`/load-sample?filename=${encodeURIComponent(filename)}`, { method: 'POST' });
-        const data = await res.json();
-        handleVideoLoaded(data);
+        handleVideoLoaded(await res.json());
         status.innerHTML = '';
     } catch (err) {
         status.innerHTML = `<p style="color:#f85149;">Error: ${err.message}</p>`;
     }
 }
 
-// Load samples on page load
 loadSamples();
 
 // ── Upload ──
 
 async function uploadVideo(file) {
     if (!file) return;
-
     const status = document.getElementById('upload-status');
-    status.innerHTML = '<p class="loading">Uploading and analyzing...</p>';
+    status.innerHTML = '<p class="loading">Uploading ' + file.name + '...</p>';
     document.getElementById('drop-zone').classList.add('active');
-
     const formData = new FormData();
     formData.append('file', file);
-
     try {
         const res = await fetch('/upload', { method: 'POST', body: formData });
-        const data = await res.json();
-        handleVideoLoaded(data);
+        handleVideoLoaded(await res.json());
         status.innerHTML = '';
-        // Refresh sample grid (upload is now in samples)
         loadSamples();
     } catch (err) {
         status.innerHTML = `<p style="color:#f85149;">Error: ${err.message}</p>`;
@@ -719,40 +734,24 @@ async function uploadVideo(file) {
 function handleVideoLoaded(data) {
     state.sessionId = data.session_id;
     state.fps = data.info.fps;
+    state.totalFrames = data.info.frame_count;
+    state.currentFrame = 0;
 
     const info = data.info;
     document.getElementById('video-info').innerHTML = `
         <span>FPS:</span> ${info.fps} &nbsp;|&nbsp;
         <span>Frames:</span> ${info.frame_count} &nbsp;|&nbsp;
-        <span>Resolution:</span> ${info.width}×${info.height} &nbsp;|&nbsp;
-        <span>Duration:</span> ${info.duration.toFixed(1)}s &nbsp;|&nbsp;
-        <span>Gemini:</span> ${data.gemini_available ? '✓' : '✗'}
+        <span>Resolution:</span> ${info.width}&times;${info.height} &nbsp;|&nbsp;
+        <span>Duration:</span> ${info.duration.toFixed(1)}s
     `;
 
-    const list = document.getElementById('delivery-list');
-    list.innerHTML = '';
-
-    if (data.deliveries.length > 0) {
-        data.deliveries.forEach((d, i) => {
-            const btn = document.createElement('button');
-            btn.className = 'delivery-btn';
-            const timeSec = (d.release_frame / state.fps).toFixed(2);
-            btn.textContent = `Delivery ${i + 1} — frame ${d.release_frame} (${timeSec}s)`;
-            btn.onclick = () => loadClip(d.release_frame);
-            list.appendChild(btn);
-        });
-    } else {
-        document.getElementById('delivery-status').innerHTML =
-            '<p class="info">No deliveries auto-detected. Enter release frame manually:</p>' +
-            '<div class="controls" style="margin-top:8px;">' +
-            '<input type="number" id="manual-frame" placeholder="Release frame #" ' +
-            'style="background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:6px;padding:8px 12px;font-family:inherit;width:160px;">' +
-            '<button class="delivery-btn" onclick="loadClip(parseInt(document.getElementById(\'manual-frame\').value))">Extract Clip</button>' +
-            '</div>';
-    }
+    document.getElementById('browse-slider').max = state.totalFrames - 1;
+    document.getElementById('browse-slider').value = 0;
+    clearMarks();
 
     document.getElementById('step-upload').classList.add('hidden');
-    document.getElementById('step-deliveries').classList.remove('hidden');
+    document.getElementById('step-browse').classList.remove('hidden');
+    browseSeek(0);
 }
 
 // Drag and drop
@@ -760,75 +759,34 @@ const dropZone = document.getElementById('drop-zone');
 dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('active'); });
 dropZone.addEventListener('dragleave', () => { dropZone.classList.remove('active'); });
 dropZone.addEventListener('drop', (e) => {
-    e.preventDefault();
-    dropZone.classList.remove('active');
+    e.preventDefault(); dropZone.classList.remove('active');
     if (e.dataTransfer.files.length > 0) uploadVideo(e.dataTransfer.files[0]);
 });
 
-// ── Clip Loading ──
-
-async function loadClip(releaseFrame) {
-    if (!releaseFrame || isNaN(releaseFrame)) return;
-
-    document.getElementById('delivery-status').innerHTML = '<p class="loading">Extracting 3s clip...</p>';
-
-    const res = await fetch(`/extract-clip?session_id=${state.sessionId}&release_frame=${releaseFrame}`, {
-        method: 'POST'
-    });
-    const clip = await res.json();
-
-    state.clipId = clip.clip_id;
-    state.totalFrames = clip.frame_count;
-    state.releaseFrameInClip = clip.release_frame_in_clip;
-    state.currentFrame = 0;
-    state.releaseFrame = null;
-    state.gateFrame = null;
-
-    // Update UI
-    document.getElementById('frame-slider').max = state.totalFrames - 1;
-    document.getElementById('frame-slider').value = 0;
-    document.getElementById('release-value').textContent = '—';
-    document.getElementById('release-value').classList.remove('set');
-    document.getElementById('gate-value').textContent = '—';
-    document.getElementById('gate-value').classList.remove('set');
-    document.getElementById('diff-value').textContent = '—';
-    document.getElementById('speed-result').classList.add('hidden');
-    document.getElementById('btn-calc').disabled = true;
-
-    document.getElementById('step-scrubber').classList.remove('hidden');
-    document.getElementById('delivery-status').innerHTML = '';
-
-    seekFrame(state.releaseFrameInClip || 0);
-}
-
 // ── Frame Navigation ──
 
-function seekFrame(n) {
+function browseSeek(n) {
     n = Math.max(0, Math.min(n, state.totalFrames - 1));
     state.currentFrame = n;
-    document.getElementById('frame-slider').value = n;
-    document.getElementById('frame-counter').textContent = `${n} / ${state.totalFrames - 1}`;
-    document.getElementById('frame-img').src = `/frame/${state.clipId}/${n}`;
+    document.getElementById('browse-slider').value = n;
+    const t = (n / state.fps).toFixed(2);
+    document.getElementById('browse-counter').textContent = `${n} / ${state.totalFrames - 1}  (${t}s)`;
+    document.getElementById('browse-img').src = `/video-frame/${state.sessionId}/${n}`;
 }
 
-function stepFrames(delta) {
-    seekFrame(state.currentFrame + delta);
-}
+function browseStep(delta) { browseSeek(state.currentFrame + delta); }
 
 function togglePlay() {
     if (state.playing) {
-        clearInterval(state.playTimer);
-        state.playing = false;
+        clearInterval(state.playTimer); state.playing = false;
     } else {
         state.playing = true;
         state.playTimer = setInterval(() => {
             if (state.currentFrame >= state.totalFrames - 1) {
-                clearInterval(state.playTimer);
-                state.playing = false;
-                return;
+                clearInterval(state.playTimer); state.playing = false; return;
             }
-            seekFrame(state.currentFrame + 1);
-        }, 1000 / 30); // playback at 30fps for review
+            browseSeek(state.currentFrame + 1);
+        }, 1000 / 30);
     }
 }
 
@@ -836,90 +794,99 @@ function togglePlay() {
 
 function markRelease() {
     state.releaseFrame = state.currentFrame;
-    document.getElementById('release-value').textContent = `Frame ${state.releaseFrame}`;
+    const t = (state.releaseFrame / state.fps).toFixed(2);
+    document.getElementById('release-value').textContent = `Frame ${state.releaseFrame} (${t}s)`;
     document.getElementById('release-value').classList.add('set');
     document.getElementById('btn-release').classList.add('active');
     updateDiff();
 }
 
-function markGate() {
-    state.gateFrame = state.currentFrame;
-    document.getElementById('gate-value').textContent = `Frame ${state.gateFrame}`;
-    document.getElementById('gate-value').classList.add('set');
-    document.getElementById('btn-gate').classList.add('active');
+function markStumps() {
+    state.stumpsFrame = state.currentFrame;
+    const t = (state.stumpsFrame / state.fps).toFixed(2);
+    document.getElementById('stumps-value').textContent = `Frame ${state.stumpsFrame} (${t}s)`;
+    document.getElementById('stumps-value').classList.add('set');
+    document.getElementById('btn-stumps').classList.add('active');
     updateDiff();
 }
 
 function updateDiff() {
-    if (state.releaseFrame !== null && state.gateFrame !== null) {
-        const diff = state.gateFrame - state.releaseFrame;
-        document.getElementById('diff-value').textContent = `${diff} frames (${(diff / state.fps).toFixed(4)}s)`;
+    if (state.releaseFrame !== null && state.stumpsFrame !== null) {
+        const diff = state.stumpsFrame - state.releaseFrame;
+        const t = (diff / state.fps).toFixed(4);
+        document.getElementById('diff-value').textContent = `${diff} frames (${t}s)`;
+        document.getElementById('diff-value').classList.add('set');
         document.getElementById('btn-calc').disabled = false;
     }
 }
 
-function toggleCustomDistance() {
-    const sel = document.getElementById('gate-type').value;
-    document.getElementById('custom-distance').classList.toggle('hidden', sel !== 'custom');
+function clearMarks() {
+    state.releaseFrame = null;
+    state.stumpsFrame = null;
+    document.getElementById('release-value').textContent = '\\u2014';
+    document.getElementById('release-value').classList.remove('set');
+    document.getElementById('stumps-value').textContent = '\\u2014';
+    document.getElementById('stumps-value').classList.remove('set');
+    document.getElementById('diff-value').textContent = '\\u2014';
+    document.getElementById('diff-value').classList.remove('set');
+    document.getElementById('btn-release').classList.remove('active');
+    document.getElementById('btn-stumps').classList.remove('active');
+    document.getElementById('btn-calc').disabled = true;
+    document.getElementById('speed-result').classList.add('hidden');
 }
 
 // ── Speed Calculation ──
 
 async function calcSpeed() {
-    if (state.releaseFrame === null || state.gateFrame === null) return;
+    if (state.releaseFrame === null || state.stumpsFrame === null) return;
 
-    const gate = document.getElementById('gate-type').value;
-    const customDist = parseFloat(document.getElementById('custom-distance').value) || null;
+    const distance = parseFloat(document.getElementById('distance-input').value);
+    if (!distance || distance <= 0) { alert('Enter a valid distance'); return; }
 
     const params = new URLSearchParams({
         release_frame: state.releaseFrame,
-        gate_frame: state.gateFrame,
+        gate_frame: state.stumpsFrame,
         fps: state.fps,
-        gate: gate,
+        gate: 'custom',
+        custom_distance: distance,
     });
-    if (customDist) params.append('custom_distance', customDist);
 
     const res = await fetch(`/calculate-speed?${params}`, { method: 'POST' });
     const data = await res.json();
 
-    if (data.error) {
-        alert(data.error);
-        return;
-    }
+    if (data.error) { alert(data.error); return; }
 
-    document.getElementById('speed-value').textContent = data.speed_kph;
-    document.getElementById('speed-value-mph').textContent = data.speed_mph;
+    document.getElementById('speed-kph').textContent = data.speed_kph;
+    document.getElementById('speed-mph').textContent = data.speed_mph;
     document.getElementById('speed-detail').textContent =
-        `${data.distance_m}m in ${data.time_s}s | ${data.frame_diff} frames @ ${state.fps}fps | ±${data.error_kph} kph / ±${data.error_mph} mph`;
+        `${data.distance_m}m in ${data.time_s}s | ${data.frame_diff} frames @ ${state.fps}fps | \\u00B1${data.error_kph} kph`;
     document.getElementById('speed-result').classList.remove('hidden');
 }
 
-// ── Keyboard Controls ──
+// ── Navigation ──
+
+function resetToUpload() {
+    if (state.playing) { clearInterval(state.playTimer); state.playing = false; }
+    state.sessionId = null;
+    clearMarks();
+    document.getElementById('step-browse').classList.add('hidden');
+    document.getElementById('step-upload').classList.remove('hidden');
+    loadSamples();
+}
+
+// ── Keyboard ──
 
 document.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+    if (document.getElementById('step-browse').classList.contains('hidden')) return;
 
     switch (e.key) {
-        case 'ArrowLeft':
-            e.preventDefault();
-            stepFrames(e.shiftKey ? -10 : -1);
-            break;
-        case 'ArrowRight':
-            e.preventDefault();
-            stepFrames(e.shiftKey ? 10 : 1);
-            break;
-        case 'r':
-        case 'R':
-            markRelease();
-            break;
-        case 'g':
-        case 'G':
-            markGate();
-            break;
-        case ' ':
-            e.preventDefault();
-            togglePlay();
-            break;
+        case 'ArrowLeft':  e.preventDefault(); browseStep(e.shiftKey ? -10 : -1); break;
+        case 'ArrowRight': e.preventDefault(); browseStep(e.shiftKey ? 10 : 1); break;
+        case 'r': case 'R': markRelease(); break;
+        case 's': case 'S': markStumps(); break;
+        case 'c': case 'C': clearMarks(); break;
+        case ' ': e.preventDefault(); togglePlay(); break;
     }
 });
 </script>
@@ -928,7 +895,6 @@ document.addEventListener('keydown', (e) => {
 
 
 if __name__ == "__main__":
-    print(f"Gemini: {'enabled' if GEMINI_AVAILABLE else 'disabled (set GOOGLE_API_KEY)'}")
     print(f"Temp dir: {UPLOAD_DIR}")
-    print(f"Open http://localhost:8000")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    print(f"Open http://localhost:8001")
+    uvicorn.run(app, host="0.0.0.0", port=8001)
