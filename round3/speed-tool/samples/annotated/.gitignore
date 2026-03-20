@@ -1,0 +1,7 @@
+*.mov
+*.mp4
+*.m4v
+*.MP4
+*.MOV
+*.jpg
+!.gitignore

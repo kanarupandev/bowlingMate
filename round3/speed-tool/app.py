@@ -41,10 +41,12 @@ UPLOAD_DIR = Path(tempfile.mkdtemp(prefix="speed_tool_"))
 CLIPS_DIR = UPLOAD_DIR / "clips"
 FRAMES_DIR = UPLOAD_DIR / "frames"
 ANNOTATIONS_DIR = APP_DIR / "annotations"
+ANNOTATED_DIR = SAMPLES_DIR / "annotated"
 CLIPS_DIR.mkdir(exist_ok=True)
 FRAMES_DIR.mkdir(exist_ok=True)
 SAMPLES_DIR.mkdir(exist_ok=True)
 ANNOTATIONS_DIR.mkdir(exist_ok=True)
+ANNOTATED_DIR.mkdir(exist_ok=True)
 
 # State
 sessions = {}
@@ -272,6 +274,8 @@ async def list_samples():
     """List all videos in samples dir (includes uploads). Shows annotation status."""
     videos = []
     for f in sorted(SAMPLES_DIR.iterdir()):
+        if f.is_dir():
+            continue
         if f.suffix.lower() in (".mov", ".mp4", ".m4v"):
             thumb = f.with_suffix(".jpg")
             info = get_video_info(str(f))
@@ -476,20 +480,79 @@ async def get_annotation(filename: str):
 
 @app.post("/annotation/{filename}")
 async def save_annotation(filename: str, data: dict):
-    """Save annotation for a video."""
+    """Save annotation and copy video + JSON to samples/annotated/."""
     data["filename"] = filename
-    path = _annotation_path(filename)
-    path.write_text(json.dumps(data, indent=2))
-    return {"saved": True, "path": str(path)}
+
+    # Save JSON to annotations/
+    ann_path = _annotation_path(filename)
+    ann_json = json.dumps(data, indent=2)
+    ann_path.write_text(ann_json)
+
+    # Copy video to samples/annotated/
+    src_video = SAMPLES_DIR / filename
+    dst_video = ANNOTATED_DIR / filename
+    if src_video.exists() and not dst_video.exists():
+        shutil.copy2(str(src_video), str(dst_video))
+
+    # Also save JSON alongside the video in annotated/
+    dst_json = ANNOTATED_DIR / f"{Path(filename).stem}.json"
+    dst_json.write_text(ann_json)
+
+    # Copy thumbnail too
+    src_thumb = SAMPLES_DIR / Path(filename).with_suffix(".jpg")
+    dst_thumb = ANNOTATED_DIR / Path(filename).with_suffix(".jpg")
+    if src_thumb.exists() and not dst_thumb.exists():
+        shutil.copy2(str(src_thumb), str(dst_thumb))
+
+    return {"saved": True, "path": str(ann_path)}
 
 
 @app.delete("/annotation/{filename}")
 async def delete_annotation(filename: str):
-    """Delete annotation for a video."""
+    """Delete annotation and remove from annotated dir."""
     path = _annotation_path(filename)
     if path.exists():
         path.unlink()
+
+    # Remove from annotated dir
+    for f in [ANNOTATED_DIR / filename,
+              ANNOTATED_DIR / f"{Path(filename).stem}.json",
+              ANNOTATED_DIR / Path(filename).with_suffix(".jpg")]:
+        if f.exists():
+            f.unlink()
+
     return {"deleted": True}
+
+
+@app.get("/annotated")
+async def list_annotated():
+    """List all annotated videos with their annotations."""
+    result = []
+    for f in sorted(ANNOTATED_DIR.iterdir()):
+        if f.suffix.lower() in (".mov", ".mp4", ".m4v"):
+            ann_path = ANNOTATED_DIR / f"{f.stem}.json"
+            ann = None
+            if ann_path.exists():
+                try:
+                    ann = json.loads(ann_path.read_text())
+                except Exception:
+                    pass
+            thumb = ANNOTATED_DIR / f"{f.stem}.jpg"
+            result.append({
+                "filename": f.name,
+                "thumbnail": f"/annotated-thumb/{f.stem}.jpg" if thumb.exists() else None,
+                "annotation": ann,
+            })
+    return result
+
+
+@app.get("/annotated-thumb/{name}")
+async def annotated_thumbnail(name: str):
+    """Serve an annotated video thumbnail."""
+    path = ANNOTATED_DIR / name
+    if not path.exists():
+        raise HTTPException(404)
+    return FileResponse(str(path), media_type="image/jpeg")
 
 
 # ──────────────────────────────────────────────────────────
@@ -691,8 +754,12 @@ input[type="range"] { flex: 1; accent-color: #006D77; height: 6px; }
     </div>
     <input type="file" id="file-input" accept="video/*" onchange="uploadVideo(this.files[0])">
     <div id="upload-status"></div>
-    <h2>Or pick from library</h2>
-    <div class="annotation-count" id="ann-count"></div>
+    <div id="annotated-section" class="hidden">
+        <h2 style="color:#238636;">Annotated <span id="ann-count" style="font-weight:normal;font-size:13px;color:#8DA9C4;"></span></h2>
+        <div class="sample-grid" id="annotated-grid"></div>
+    </div>
+
+    <h2>Library</h2>
     <div class="sample-grid" id="sample-grid"></div>
 </div>
 
@@ -769,7 +836,13 @@ input[type="range"] { flex: 1; accent-color: #006D77; height: 6px; }
         <span class="unit">&times;</span>
     </div>
 
-    <div class="save-status" id="save-status">Annotation saved</div>
+    <div id="save-section" class="hidden" style="margin:12px 0;">
+        <button class="btn" id="btn-save" onclick="saveToAnnotated()"
+                style="background:#238636;padding:12px 24px;font-size:15px;font-weight:600;width:100%;">
+            Save to Annotated
+        </button>
+        <div class="save-status" id="save-status"></div>
+    </div>
 
     <div class="bottom-bar">
         <button class="btn" onclick="clearAll()">Clear (C)</button>
@@ -800,17 +873,42 @@ let state = {
 
 async function loadSamples() {
     try {
+        // Load annotated list
+        const annRes = await fetch('/annotated');
+        const annotatedList = await annRes.json();
+
+        const annGrid = document.getElementById('annotated-grid');
+        const annSection = document.getElementById('annotated-section');
+        annGrid.innerHTML = '';
+
+        if (annotatedList.length > 0) {
+            annSection.classList.remove('hidden');
+            document.getElementById('ann-count').textContent = `(${annotatedList.length})`;
+            annotatedList.forEach(a => {
+                const card = document.createElement('div');
+                card.className = 'sample-card annotated';
+                card.onclick = () => loadSample(a.filename);
+                const spd = a.annotation ? a.annotation.speed_kph : '?';
+                card.innerHTML = `
+                    ${a.thumbnail ? `<img src="${a.thumbnail}" alt="${a.filename}">` : '<div style="height:100px;background:#21262d;"></div>'}
+                    <div class="ann-badge">${spd} kph</div>
+                    <div class="meta">
+                        <div class="name">${a.filename}</div>
+                        ${a.annotation ? `F${a.annotation.release_frame} \\u2192 F${a.annotation.stumps_frame} | ${a.annotation.time_s}s` : ''}
+                    </div>`;
+                annGrid.appendChild(card);
+            });
+        } else {
+            annSection.classList.add('hidden');
+        }
+
+        // Load library
         const res = await fetch('/samples');
         const samples = await res.json();
         const grid = document.getElementById('sample-grid');
         grid.innerHTML = '';
 
-        const total = samples.length;
-        const annotated = samples.filter(s => s.annotated).length;
-        document.getElementById('ann-count').innerHTML =
-            `<strong>${annotated}</strong> / ${total} annotated`;
-
-        if (total === 0) {
+        if (samples.length === 0) {
             grid.innerHTML = '<p style="color:#8DA9C4;font-size:13px;">No videos yet. Upload one.</p>';
             return;
         }
@@ -820,7 +918,7 @@ async function loadSamples() {
             card.onclick = () => loadSample(s.filename);
             const badge = s.annotated
                 ? `<div class="ann-badge">${s.speed_kph} kph</div>`
-                : `<div class="ann-badge none">--</div>`;
+                : '';
             card.innerHTML = `
                 ${s.thumbnail ? `<img src="${s.thumbnail}" alt="${s.filename}">` : '<div style="height:100px;background:#21262d;"></div>'}
                 ${badge}
@@ -1076,27 +1174,34 @@ async function calcSpeed() {
     ds.textContent = `Release F${state.releaseFrame} \\u2192 Stumps F${state.stumpsFrame} | ${data.frame_diff} frames | ${data.time_s}s | ${data.distance_m}m | \\u00B1${data.error_kph} kph`;
     ds.style.display = 'block';
 
-    // Auto-save annotation
-    saveAnnotation(data, adj);
+    // Store last speed data for saving
+    state.lastSpeedData = data;
+    state.lastAdj = adj;
+
+    // Show save button
+    document.getElementById('save-section').classList.remove('hidden');
+    document.getElementById('save-status').textContent = '';
 }
 
-async function saveAnnotation(speedData, adj) {
-    if (!state.filename) return;
+async function saveToAnnotated() {
+    if (!state.filename || !state.lastSpeedData) return;
+    const data = state.lastSpeedData;
+    const adj = state.lastAdj;
 
     const annotation = {
         filename: state.filename,
         release_frame: state.releaseFrame,
         stumps_frame: state.stumpsFrame,
         fps: state.fps,
-        distance_m: speedData.distance_m,
-        frame_diff: speedData.frame_diff,
-        time_s: speedData.time_s,
-        speed_kph: speedData.speed_kph,
-        speed_mph: speedData.speed_mph,
-        release_est_kph: speedData.release_est_kph,
-        release_est_mph: speedData.release_est_mph,
+        distance_m: data.distance_m,
+        frame_diff: data.frame_diff,
+        time_s: data.time_s,
+        speed_kph: data.speed_kph,
+        speed_mph: data.speed_mph,
+        release_est_kph: data.release_est_kph,
+        release_est_mph: data.release_est_mph,
         release_adj: adj,
-        error_kph: speedData.error_kph,
+        error_kph: data.error_kph,
         annotated_at: new Date().toISOString(),
     };
 
@@ -1107,10 +1212,14 @@ async function saveAnnotation(speedData, adj) {
             body: JSON.stringify(annotation),
         });
         const ss = document.getElementById('save-status');
-        ss.textContent = `Annotation saved (${speedData.speed_kph} kph)`;
-        ss.classList.add('show');
-        setTimeout(() => ss.classList.remove('show'), 2000);
-    } catch (e) { console.error('Save failed:', e); }
+        ss.textContent = `Saved: ${data.speed_kph} kph (video copied to annotated/)`;
+        ss.style.color = '#238636';
+        document.getElementById('btn-save').textContent = 'Saved';
+        document.getElementById('btn-save').disabled = true;
+    } catch (e) {
+        document.getElementById('save-status').textContent = 'Save failed';
+        document.getElementById('save-status').style.color = '#f85149';
+    }
 }
 
 function hideSpeedOverlay() {
@@ -1123,11 +1232,16 @@ function hideSpeedOverlay() {
 function clearAll() {
     state.releaseFrame = null;
     state.stumpsFrame = null;
+    state.lastSpeedData = null;
 
     document.getElementById('btn-release').classList.remove('active');
     document.getElementById('btn-release').textContent = 'Mark Release (R)';
     document.getElementById('release-badge').classList.add('hidden');
     document.getElementById('phase2').classList.add('hidden');
+    document.getElementById('save-section').classList.add('hidden');
+    document.getElementById('btn-save').textContent = 'Save to Annotated';
+    document.getElementById('btn-save').disabled = false;
+    document.getElementById('save-status').textContent = '';
     hideSpeedOverlay();
 }
 
