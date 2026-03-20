@@ -40,9 +40,11 @@ SAMPLES_DIR = APP_DIR / "samples"
 UPLOAD_DIR = Path(tempfile.mkdtemp(prefix="speed_tool_"))
 CLIPS_DIR = UPLOAD_DIR / "clips"
 FRAMES_DIR = UPLOAD_DIR / "frames"
+ANNOTATIONS_DIR = APP_DIR / "annotations"
 CLIPS_DIR.mkdir(exist_ok=True)
 FRAMES_DIR.mkdir(exist_ok=True)
 SAMPLES_DIR.mkdir(exist_ok=True)
+ANNOTATIONS_DIR.mkdir(exist_ok=True)
 
 # State
 sessions = {}
@@ -267,18 +269,27 @@ async def index():
 
 @app.get("/samples")
 async def list_samples():
-    """List all videos in samples dir (includes uploads)."""
+    """List all videos in samples dir (includes uploads). Shows annotation status."""
     videos = []
     for f in sorted(SAMPLES_DIR.iterdir()):
         if f.suffix.lower() in (".mov", ".mp4", ".m4v"):
             thumb = f.with_suffix(".jpg")
             info = get_video_info(str(f))
+            ann_path = _annotation_path(f.name)
+            ann = None
+            if ann_path.exists():
+                try:
+                    ann = json.loads(ann_path.read_text())
+                except Exception:
+                    pass
             videos.append({
                 "filename": f.name,
                 "thumbnail": f"/sample-thumb/{f.stem}.jpg" if thumb.exists() else None,
                 "duration": round(info["duration"], 1),
                 "fps": info["fps"],
                 "resolution": f"{info['width']}x{info['height']}",
+                "annotated": ann is not None,
+                "speed_kph": ann.get("speed_kph") if ann else None,
             })
     return videos
 
@@ -420,10 +431,65 @@ async def calculate_speed_endpoint(
     fps: float,
     gate: str = "stumps",
     custom_distance: float = None,
+    release_adj: float = 1.08,
 ):
-    """Calculate speed from marked frames."""
+    """Calculate speed from marked frames. Includes estimated release speed."""
     result = calculate_speed(release_frame, gate_frame, fps, gate, custom_distance)
+    if "error" not in result:
+        result["release_est_kph"] = round(result["speed_kph"] * release_adj, 1)
+        result["release_est_mph"] = round(result["speed_mph"] * release_adj, 1)
+        result["release_adj"] = release_adj
     return result
+
+
+# ──────────────────────────────────────────────────────────
+# Annotations
+# ──────────────────────────────────────────────────────────
+
+def _annotation_path(filename: str) -> Path:
+    """Get annotation JSON path for a video filename."""
+    stem = Path(filename).stem
+    return ANNOTATIONS_DIR / f"{stem}.json"
+
+
+@app.get("/annotations")
+async def list_annotations():
+    """List all annotations."""
+    result = {}
+    for f in ANNOTATIONS_DIR.glob("*.json"):
+        try:
+            data = json.loads(f.read_text())
+            result[data.get("filename", f.stem)] = data
+        except Exception:
+            pass
+    return result
+
+
+@app.get("/annotation/{filename}")
+async def get_annotation(filename: str):
+    """Get annotation for a specific video."""
+    path = _annotation_path(filename)
+    if not path.exists():
+        return {"annotated": False}
+    return json.loads(path.read_text())
+
+
+@app.post("/annotation/{filename}")
+async def save_annotation(filename: str, data: dict):
+    """Save annotation for a video."""
+    data["filename"] = filename
+    path = _annotation_path(filename)
+    path.write_text(json.dumps(data, indent=2))
+    return {"saved": True, "path": str(path)}
+
+
+@app.delete("/annotation/{filename}")
+async def delete_annotation(filename: str):
+    """Delete annotation for a video."""
+    path = _annotation_path(filename)
+    if path.exists():
+        path.unlink()
+    return {"deleted": True}
 
 
 # ──────────────────────────────────────────────────────────
@@ -441,11 +507,11 @@ HTML_PAGE = """<!DOCTYPE html>
 body {
     font-family: -apple-system, BlinkMacSystemFont, 'SF Mono', monospace;
     background: #0D1117; color: #e6edf3;
-    max-width: 900px; margin: 0 auto; padding: 20px;
+    max-width: 960px; margin: 0 auto; padding: 20px;
 }
 h1 { color: #006D77; margin-bottom: 4px; font-size: 24px; }
 .subtitle { color: #8DA9C4; font-size: 14px; margin-bottom: 20px; }
-h2 { color: #8DA9C4; margin: 20px 0 10px; font-size: 18px; }
+h2 { color: #8DA9C4; margin: 16px 0 8px; font-size: 16px; }
 
 .upload-zone {
     border: 2px dashed #30363d; border-radius: 12px;
@@ -456,7 +522,7 @@ h2 { color: #8DA9C4; margin: 20px 0 10px; font-size: 18px; }
 .upload-zone.active { border-color: #006D77; background: #006D7710; }
 input[type="file"] { display: none; }
 
-.info { background: #161b22; border-radius: 8px; padding: 16px; margin: 12px 0; font-size: 14px; }
+.info { background: #161b22; border-radius: 8px; padding: 12px 16px; margin: 8px 0; font-size: 13px; }
 .info span { color: #8DA9C4; }
 
 .btn {
@@ -465,101 +531,151 @@ input[type="file"] { display: none; }
 }
 .btn:hover { background: #008891; }
 .btn:disabled { opacity: 0.4; cursor: not-allowed; }
-.btn.active { background: #238636; border-color: #238636; }
 
-.scrubber { margin: 16px 0; }
-.frame-display {
-    background: #000; border-radius: 8px; overflow: hidden;
+/* Main frame display with overlay */
+.frame-container {
+    position: relative; background: #000; border-radius: 8px;
+    overflow: hidden; min-height: 300px;
     display: flex; justify-content: center; align-items: center;
-    min-height: 300px; position: relative;
 }
-.frame-display img { max-width: 100%; max-height: 480px; }
+.frame-container img { max-width: 100%; max-height: 500px; display: block; }
 .frame-counter {
-    position: absolute; top: 10px; right: 10px;
+    position: absolute; top: 8px; left: 8px;
     background: #000000cc; color: #fff; padding: 4px 10px;
-    border-radius: 4px; font-size: 13px; font-family: 'SF Mono', monospace;
+    border-radius: 4px; font-size: 12px;
+}
+.release-badge {
+    position: absolute; top: 8px; right: 8px;
+    background: #006D77cc; color: #fff; padding: 4px 10px;
+    border-radius: 4px; font-size: 12px;
+}
+/* Speed overlay on frame */
+.speed-overlay {
+    position: absolute; bottom: 12px; right: 12px;
+    background: #000000dd; border: 1px solid #006D77;
+    border-radius: 8px; padding: 12px 16px; text-align: right;
+    min-width: 160px; display: none;
+}
+.speed-overlay .delivery-speed { font-size: 36px; font-weight: bold; color: #006D77; line-height: 1; }
+.speed-overlay .delivery-unit { font-size: 14px; color: #8DA9C4; }
+.speed-overlay .release-speed { font-size: 20px; color: #e6edf3; margin-top: 4px; }
+.speed-overlay .release-label { font-size: 11px; color: #8DA9C4; }
+.speed-overlay .mph-line { font-size: 14px; color: #8DA9C4; margin-top: 2px; }
+.speed-overlay .detail-line { font-size: 10px; color: #8DA9C480; margin-top: 4px; }
+/* Detail strip at bottom of frame */
+.detail-strip {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    background: #000000aa; padding: 4px 12px;
+    font-size: 11px; color: #8DA9C4; display: none;
 }
 
-.controls { display: flex; align-items: center; gap: 8px; margin: 10px 0; }
+.controls { display: flex; align-items: center; gap: 6px; margin: 8px 0; }
 .controls button {
     background: #21262d; color: #e6edf3; border: 1px solid #30363d;
-    border-radius: 6px; padding: 8px 14px; cursor: pointer;
-    font-family: inherit; font-size: 16px; min-width: 44px;
+    border-radius: 6px; padding: 6px 12px; cursor: pointer;
+    font-family: inherit; font-size: 15px; min-width: 40px;
 }
 .controls button:hover { background: #30363d; }
-
 input[type="range"] { flex: 1; accent-color: #006D77; height: 6px; }
 
-.marks { display: flex; gap: 12px; margin: 12px 0; font-size: 14px; }
-.mark-box {
-    background: #161b22; border-radius: 8px; padding: 12px 16px; flex: 1;
+.mark-release-btn {
+    width: 100%; padding: 14px; font-size: 16px; border-radius: 8px;
+    border: 2px solid #006D77; background: #006D7720; color: #006D77;
+    cursor: pointer; font-family: inherit; font-weight: 600;
+    transition: all 0.15s; margin: 8px 0;
 }
-.mark-box .label { color: #8DA9C4; font-size: 12px; }
-.mark-box .value { font-size: 20px; margin-top: 4px; }
-.mark-box .value.set { color: #238636; }
+.mark-release-btn:hover { background: #006D7740; }
+.mark-release-btn.active { background: #006D77; color: white; }
 
-.distance-row {
-    display: flex; align-items: center; gap: 10px; margin: 16px 0;
-    background: #161b22; border-radius: 8px; padding: 12px 16px;
-}
-.distance-row label { color: #8DA9C4; font-size: 13px; white-space: nowrap; }
-.distance-row input {
+/* Thumbnail strip */
+.thumb-section { margin: 16px 0; }
+.thumb-label { color: #8DA9C4; font-size: 13px; margin-bottom: 8px; }
+.thumb-nav { display: flex; align-items: center; gap: 6px; }
+.thumb-nav button {
     background: #21262d; color: #e6edf3; border: 1px solid #30363d;
-    border-radius: 6px; padding: 8px 12px; font-family: inherit;
-    font-size: 18px; width: 100px; text-align: center;
+    border-radius: 6px; padding: 8px 10px; cursor: pointer;
+    font-family: inherit; font-size: 14px; min-width: 36px;
 }
-.distance-row .unit { color: #8DA9C4; font-size: 14px; }
+.thumb-nav button:hover { background: #30363d; }
+.thumb-strip {
+    display: flex; gap: 4px; flex: 1; overflow: hidden;
+}
+.thumb-strip .thumb {
+    flex: 1; min-width: 0; cursor: pointer; border-radius: 4px;
+    border: 2px solid transparent; overflow: hidden; position: relative;
+    transition: border-color 0.15s;
+}
+.thumb-strip .thumb:hover { border-color: #da3634; }
+.thumb-strip .thumb.selected { border-color: #da3634; }
+.thumb-strip .thumb img {
+    width: 100%; height: 80px; object-fit: cover; display: block;
+}
+.thumb-strip .thumb .thumb-label {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    background: #000000cc; color: #fff; font-size: 10px;
+    padding: 2px 4px; text-align: center;
+}
 
-.speed-result {
-    background: #006D7720; border: 2px solid #006D77; border-radius: 12px;
-    padding: 24px; text-align: center; margin: 20px 0;
+.settings-row {
+    display: flex; align-items: center; gap: 12px; margin: 10px 0;
+    background: #161b22; border-radius: 8px; padding: 10px 16px;
+    flex-wrap: wrap; font-size: 13px;
 }
-.speed-result .speed { font-size: 56px; font-weight: bold; color: #006D77; }
-.speed-result .speed-secondary { font-size: 28px; color: #8DA9C4; margin-top: 4px; }
-.speed-result .unit { font-size: 20px; color: #8DA9C4; }
-.speed-result .detail { font-size: 13px; color: #8DA9C4; margin-top: 8px; }
+.settings-row label { color: #8DA9C4; white-space: nowrap; }
+.settings-row input {
+    background: #21262d; color: #e6edf3; border: 1px solid #30363d;
+    border-radius: 4px; padding: 4px 8px; font-family: inherit;
+    font-size: 14px; width: 70px; text-align: center;
+}
+.settings-row .unit { color: #8DA9C480; font-size: 12px; }
 
 .hidden { display: none; }
 .loading { color: #8DA9C4; font-style: italic; }
 
 .keyboard-help {
-    background: #161b22; border-radius: 8px; padding: 10px 16px;
-    font-size: 12px; color: #8DA9C4; margin: 12px 0;
+    background: #161b22; border-radius: 8px; padding: 8px 16px;
+    font-size: 11px; color: #8DA9C4; margin: 8px 0;
 }
 .keyboard-help kbd {
     background: #21262d; border: 1px solid #30363d; border-radius: 3px;
-    padding: 2px 6px; font-family: inherit;
+    padding: 1px 5px; font-family: inherit;
 }
 
 .sample-grid {
-    display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-    gap: 12px; margin: 16px 0;
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 10px; margin: 12px 0;
 }
 .sample-card {
     background: #161b22; border: 1px solid #30363d; border-radius: 8px;
     overflow: hidden; cursor: pointer; transition: border-color 0.2s;
+    position: relative;
 }
 .sample-card:hover { border-color: #006D77; }
-.sample-card img { width: 100%; height: 120px; object-fit: cover; }
-.sample-card .meta { padding: 8px; font-size: 12px; color: #8DA9C4; }
-.sample-card .name { color: #e6edf3; font-size: 13px; margin-bottom: 4px; }
+.sample-card.annotated { border-color: #238636; }
+.sample-card img { width: 100%; height: 100px; object-fit: cover; }
+.sample-card .meta { padding: 6px 8px; font-size: 11px; color: #8DA9C4; }
+.sample-card .name { color: #e6edf3; font-size: 12px; margin-bottom: 2px; }
+.sample-card .ann-badge {
+    position: absolute; top: 4px; right: 4px;
+    background: #238636; color: white; font-size: 10px; font-weight: bold;
+    padding: 2px 6px; border-radius: 3px;
+}
+.sample-card .ann-badge.none {
+    background: #30363d; color: #8DA9C4;
+}
 
-.mark-buttons { display: flex; gap: 8px; margin: 10px 0; }
-.mark-buttons button {
-    flex: 1; padding: 12px; font-size: 15px; border-radius: 8px;
-    border: 2px solid; cursor: pointer; font-family: inherit; font-weight: 600;
-    transition: all 0.15s;
+.annotation-count {
+    color: #8DA9C4; font-size: 13px; margin: 8px 0;
 }
-.mark-buttons .release-btn {
-    background: #006D7720; border-color: #006D77; color: #006D77;
+.annotation-count strong { color: #238636; }
+
+.save-status {
+    color: #238636; font-size: 12px; margin-top: 4px;
+    opacity: 0; transition: opacity 0.3s;
 }
-.mark-buttons .release-btn:hover { background: #006D7740; }
-.mark-buttons .release-btn.active { background: #006D77; color: white; }
-.mark-buttons .stumps-btn {
-    background: #da363420; border-color: #da3634; color: #da3634;
-}
-.mark-buttons .stumps-btn:hover { background: #da363440; }
-.mark-buttons .stumps-btn.active { background: #da3634; color: white; }
+.save-status.show { opacity: 1; }
+
+.bottom-bar { margin-top: 16px; display: flex; gap: 8px; }
 </style>
 </head>
 <body>
@@ -567,108 +683,117 @@ input[type="range"] { flex: 1; accent-color: #006D77; height: 6px; }
 <h1>Speed Tool</h1>
 <p class="subtitle">Hit the stumps, get your speed.</p>
 
-<!-- Step 1: Upload or pick sample -->
+<!-- Step 1: Upload / Library -->
 <div id="step-upload">
     <div class="upload-zone" onclick="document.getElementById('file-input').click()" id="drop-zone">
         <p style="font-size: 18px; margin-bottom: 8px;">Drop video here or click to upload</p>
-        <p style="color: #8DA9C4; font-size: 14px;">iPhone slo-mo (120fps / 240fps) recommended</p>
+        <p style="color: #8DA9C4; font-size: 13px;">iPhone slo-mo 240fps recommended</p>
     </div>
     <input type="file" id="file-input" accept="video/*" onchange="uploadVideo(this.files[0])">
     <div id="upload-status"></div>
-
     <h2>Or pick from library</h2>
+    <div class="annotation-count" id="ann-count"></div>
     <div class="sample-grid" id="sample-grid"></div>
 </div>
 
-<!-- Step 2: Browse + measure -->
-<div id="step-browse" class="hidden">
+<!-- Step 2: Measure -->
+<div id="step-measure" class="hidden">
     <div class="info" id="video-info"></div>
 
     <div class="keyboard-help">
-        <kbd>&larr;</kbd> / <kbd>&rarr;</kbd> &plusmn;1 frame &nbsp;
-        <kbd>Shift</kbd>+arrows &plusmn;10 &nbsp;
-        <kbd>R</kbd> mark release &nbsp;
-        <kbd>S</kbd> mark stumps hit &nbsp;
-        <kbd>Space</kbd> play/pause &nbsp;
-        <kbd>C</kbd> clear marks
+        <kbd>&larr;</kbd>/<kbd>&rarr;</kbd> &plusmn;1 &nbsp;
+        <kbd>Shift</kbd> &plusmn;10 &nbsp;
+        <kbd>R</kbd> release &nbsp;
+        <kbd>Space</kbd> play &nbsp;
+        <kbd>C</kbd> clear
     </div>
 
-    <div class="scrubber">
-        <div class="frame-display">
-            <img id="browse-img" src="" alt="frame">
-            <div class="frame-counter" id="browse-counter">0 / 0</div>
+    <!-- Main frame with overlay -->
+    <div class="frame-container" id="frame-container">
+        <img id="main-frame" src="" alt="frame">
+        <div class="frame-counter" id="frame-counter">0 / 0</div>
+        <div class="release-badge hidden" id="release-badge">Release: —</div>
+        <div class="speed-overlay" id="speed-overlay">
+            <div class="delivery-speed" id="ov-delivery">—</div>
+            <div class="delivery-unit">km/h delivery</div>
+            <div class="release-speed" id="ov-release">—</div>
+            <div class="release-label">est. release</div>
+            <div class="mph-line" id="ov-mph">—</div>
+            <div class="detail-line" id="ov-detail"></div>
         </div>
-        <div class="controls">
-            <button onclick="browseStep(-10)">-10</button>
-            <button onclick="browseStep(-1)">&larr;</button>
-            <input type="range" id="browse-slider" min="0" max="0" value="0"
-                   oninput="browseSeek(parseInt(this.value))">
-            <button onclick="browseStep(1)">&rarr;</button>
-            <button onclick="browseStep(10)">+10</button>
+        <div class="detail-strip" id="detail-strip"></div>
+    </div>
+
+    <!-- Scrubber -->
+    <div class="controls">
+        <button onclick="browseStep(-10)">-10</button>
+        <button onclick="browseStep(-1)">&larr;</button>
+        <input type="range" id="browse-slider" min="0" max="0" value="0"
+               oninput="browseSeek(parseInt(this.value))">
+        <button onclick="browseStep(1)">&rarr;</button>
+        <button onclick="browseStep(10)">+10</button>
+    </div>
+
+    <!-- Phase 1: Mark Release -->
+    <button class="mark-release-btn" id="btn-release" onclick="markRelease()">
+        Mark Release (R)
+    </button>
+
+    <!-- Phase 2: Thumbnail strip (appears after release) -->
+    <div id="phase2" class="hidden">
+        <div class="thumb-section">
+            <div class="thumb-label">Pick the frame where stumps are hit:</div>
+            <div class="thumb-nav">
+                <button onclick="shiftStrip(-state.batchSize)" title="Shift batch">&laquo;</button>
+                <button onclick="shiftStrip(-1)" title="Shift 1">&lsaquo;</button>
+                <div class="thumb-strip" id="thumb-strip"></div>
+                <button onclick="shiftStrip(1)" title="Shift 1">&rsaquo;</button>
+                <button onclick="shiftStrip(state.batchSize)" title="Shift batch">&raquo;</button>
+            </div>
         </div>
     </div>
 
-    <div class="mark-buttons">
-        <button class="release-btn" id="btn-release" onclick="markRelease()">
-            Mark Release (R)
-        </button>
-        <button class="stumps-btn" id="btn-stumps" onclick="markStumps()">
-            Stumps Hit! (S)
-        </button>
-    </div>
-
-    <div class="marks">
-        <div class="mark-box">
-            <div class="label">Release Frame</div>
-            <div class="value" id="release-value">&mdash;</div>
-        </div>
-        <div class="mark-box">
-            <div class="label">Stumps Hit Frame</div>
-            <div class="value" id="stumps-value">&mdash;</div>
-        </div>
-        <div class="mark-box">
-            <div class="label">Transit</div>
-            <div class="value" id="diff-value">&mdash;</div>
-        </div>
-    </div>
-
-    <div class="distance-row">
-        <label>Crease to stumps:</label>
+    <!-- Settings -->
+    <div class="settings-row">
+        <label>Distance:</label>
         <input type="number" id="distance-input" value="18.90" step="0.1" min="1" max="30">
-        <span class="unit">metres</span>
-        <button class="btn" onclick="calcSpeed()" id="btn-calc" disabled>
-            Calculate Speed
-        </button>
+        <span class="unit">m</span>
+        <label>Batch:</label>
+        <input type="number" id="batch-input" value="5" step="1" min="2" max="8"
+               onchange="updateBatchSize()">
+        <label>Jump:</label>
+        <input type="number" id="jump-input" value="0.6" step="0.1" min="0.1" max="2.0">
+        <span class="unit">s</span>
+        <label>Adj:</label>
+        <input type="number" id="adj-input" value="1.08" step="0.01" min="1.0" max="1.3">
+        <span class="unit">&times;</span>
     </div>
 
-    <div id="speed-result" class="hidden">
-        <div class="speed-result">
-            <div class="speed" id="speed-kph">&mdash;</div>
-            <div class="unit">km/h</div>
-            <div class="speed-secondary" id="speed-mph">&mdash;</div>
-            <div class="unit" style="font-size:14px;">mph</div>
-            <div class="detail" id="speed-detail"></div>
-        </div>
-    </div>
+    <div class="save-status" id="save-status">Annotation saved</div>
 
-    <div style="margin-top:20px; display:flex; gap:8px;">
-        <button class="btn" onclick="clearMarks()">Clear Marks</button>
+    <div class="bottom-bar">
+        <button class="btn" onclick="clearAll()">Clear (C)</button>
         <button class="btn" onclick="resetToUpload()" style="background:#21262d;border:1px solid #30363d;">
-            &larr; Back to Library
+            &larr; Library
         </button>
     </div>
 </div>
 
 <script>
+const RELEASE_ADJ_DEFAULT = 1.08;
+
 let state = {
     sessionId: null,
-    fps: 120,
+    filename: null,
+    fps: 240,
     totalFrames: 0,
     currentFrame: 0,
     releaseFrame: null,
     stumpsFrame: null,
     playing: false,
     playTimer: null,
+    batchSize: 5,
+    stripStart: 0,
 };
 
 // ── Samples ──
@@ -679,85 +804,123 @@ async function loadSamples() {
         const samples = await res.json();
         const grid = document.getElementById('sample-grid');
         grid.innerHTML = '';
-        if (samples.length === 0) {
-            grid.innerHTML = '<p style="color:#8DA9C4;font-size:14px;">No videos yet. Upload one.</p>';
+
+        const total = samples.length;
+        const annotated = samples.filter(s => s.annotated).length;
+        document.getElementById('ann-count').innerHTML =
+            `<strong>${annotated}</strong> / ${total} annotated`;
+
+        if (total === 0) {
+            grid.innerHTML = '<p style="color:#8DA9C4;font-size:13px;">No videos yet. Upload one.</p>';
             return;
         }
         samples.forEach(s => {
             const card = document.createElement('div');
-            card.className = 'sample-card';
+            card.className = 'sample-card' + (s.annotated ? ' annotated' : '');
             card.onclick = () => loadSample(s.filename);
+            const badge = s.annotated
+                ? `<div class="ann-badge">${s.speed_kph} kph</div>`
+                : `<div class="ann-badge none">--</div>`;
             card.innerHTML = `
-                ${s.thumbnail ? `<img src="${s.thumbnail}" alt="${s.filename}">` : '<div style="height:120px;background:#21262d;"></div>'}
+                ${s.thumbnail ? `<img src="${s.thumbnail}" alt="${s.filename}">` : '<div style="height:100px;background:#21262d;"></div>'}
+                ${badge}
                 <div class="meta">
                     <div class="name">${s.filename}</div>
-                    ${s.fps}fps | ${s.duration}s | ${s.resolution}
+                    ${Math.round(s.fps)}fps | ${s.duration}s | ${s.resolution}
                 </div>`;
             grid.appendChild(card);
         });
-    } catch (err) { console.error('Failed to load samples:', err); }
+    } catch (err) { console.error(err); }
 }
 
 async function loadSample(filename) {
-    const status = document.getElementById('upload-status');
-    status.innerHTML = '<p class="loading">Loading...</p>';
+    document.getElementById('upload-status').innerHTML = '<p class="loading">Loading...</p>';
     try {
         const res = await fetch(`/load-sample?filename=${encodeURIComponent(filename)}`, { method: 'POST' });
-        handleVideoLoaded(await res.json());
-        status.innerHTML = '';
+        const data = await res.json();
+        data._filename = filename;
+        handleVideoLoaded(data);
+        document.getElementById('upload-status').innerHTML = '';
     } catch (err) {
-        status.innerHTML = `<p style="color:#f85149;">Error: ${err.message}</p>`;
+        document.getElementById('upload-status').innerHTML = `<p style="color:#f85149;">${err.message}</p>`;
     }
 }
-
 loadSamples();
 
 // ── Upload ──
 
 async function uploadVideo(file) {
     if (!file) return;
-    const status = document.getElementById('upload-status');
-    status.innerHTML = '<p class="loading">Uploading ' + file.name + '...</p>';
+    document.getElementById('upload-status').innerHTML = '<p class="loading">Uploading...</p>';
     document.getElementById('drop-zone').classList.add('active');
-    const formData = new FormData();
-    formData.append('file', file);
+    const fd = new FormData(); fd.append('file', file);
     try {
-        const res = await fetch('/upload', { method: 'POST', body: formData });
+        const res = await fetch('/upload', { method: 'POST', body: fd });
         handleVideoLoaded(await res.json());
-        status.innerHTML = '';
+        document.getElementById('upload-status').innerHTML = '';
         loadSamples();
     } catch (err) {
-        status.innerHTML = `<p style="color:#f85149;">Error: ${err.message}</p>`;
+        document.getElementById('upload-status').innerHTML = `<p style="color:#f85149;">${err.message}</p>`;
     }
 }
 
-function handleVideoLoaded(data) {
+async function handleVideoLoaded(data) {
     state.sessionId = data.session_id;
+    state.filename = data._filename || data.session_id;
     state.fps = data.info.fps;
     state.totalFrames = data.info.frame_count;
     state.currentFrame = 0;
+    state.batchSize = parseInt(document.getElementById('batch-input').value) || 5;
 
-    const info = data.info;
     document.getElementById('video-info').innerHTML = `
-        <span>FPS:</span> ${info.fps} &nbsp;|&nbsp;
-        <span>Frames:</span> ${info.frame_count} &nbsp;|&nbsp;
-        <span>Resolution:</span> ${info.width}&times;${info.height} &nbsp;|&nbsp;
-        <span>Duration:</span> ${info.duration.toFixed(1)}s
+        <span>FPS:</span> ${Math.round(state.fps)} &nbsp;|&nbsp;
+        <span>Frames:</span> ${state.totalFrames} &nbsp;|&nbsp;
+        <span>Resolution:</span> ${data.info.width}&times;${data.info.height} &nbsp;|&nbsp;
+        <span>Duration:</span> ${data.info.duration.toFixed(1)}s &nbsp;|&nbsp;
+        <span>${state.filename}</span>
     `;
 
     document.getElementById('browse-slider').max = state.totalFrames - 1;
     document.getElementById('browse-slider').value = 0;
-    clearMarks();
+    clearAll();
 
     document.getElementById('step-upload').classList.add('hidden');
-    document.getElementById('step-browse').classList.remove('hidden');
+    document.getElementById('step-measure').classList.remove('hidden');
+
+    // Load existing annotation if any
+    try {
+        const annRes = await fetch(`/annotation/${encodeURIComponent(state.filename)}`);
+        const ann = await annRes.json();
+        if (ann.annotated !== false && ann.release_frame != null) {
+            // Restore annotation
+            state.releaseFrame = ann.release_frame;
+            state.stumpsFrame = ann.stumps_frame;
+            const t = (state.releaseFrame / state.fps).toFixed(2);
+            document.getElementById('release-badge').textContent = `Release: F${state.releaseFrame} (${t}s)`;
+            document.getElementById('release-badge').classList.remove('hidden');
+            document.getElementById('btn-release').classList.add('active');
+            document.getElementById('btn-release').textContent = `Release: Frame ${state.releaseFrame} (${t}s) — press R to re-mark`;
+
+            if (ann.distance_m) document.getElementById('distance-input').value = ann.distance_m;
+
+            // Show phase 2 and jump to stumps frame
+            const jumpSec = parseFloat(document.getElementById('jump-input').value) || 0.6;
+            state.stripStart = Math.max(0, state.stumpsFrame - 2);
+            document.getElementById('phase2').classList.remove('hidden');
+            renderStrip();
+            browseSeek(state.stumpsFrame);
+            calcSpeed();
+            return;
+        }
+    } catch (e) { /* no annotation, fine */ }
+
     browseSeek(0);
 }
 
 // Drag and drop
 const dropZone = document.getElementById('drop-zone');
 dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('active'); });
-dropZone.addEventListener('dragleave', () => { dropZone.classList.remove('active'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('active'));
 dropZone.addEventListener('drop', (e) => {
     e.preventDefault(); dropZone.classList.remove('active');
     if (e.dataTransfer.files.length > 0) uploadVideo(e.dataTransfer.files[0]);
@@ -770,8 +933,8 @@ function browseSeek(n) {
     state.currentFrame = n;
     document.getElementById('browse-slider').value = n;
     const t = (n / state.fps).toFixed(2);
-    document.getElementById('browse-counter').textContent = `${n} / ${state.totalFrames - 1}  (${t}s)`;
-    document.getElementById('browse-img').src = `/video-frame/${state.sessionId}/${n}`;
+    document.getElementById('frame-counter').textContent = `F${n} / ${state.totalFrames - 1}  (${t}s)`;
+    document.getElementById('main-frame').src = `/video-frame/${state.sessionId}/${n}`;
 }
 
 function browseStep(delta) { browseSeek(state.currentFrame + delta); }
@@ -790,58 +953,98 @@ function togglePlay() {
     }
 }
 
-// ── Marking ──
+// ── Phase 1: Mark Release ──
 
 function markRelease() {
     state.releaseFrame = state.currentFrame;
     const t = (state.releaseFrame / state.fps).toFixed(2);
-    document.getElementById('release-value').textContent = `Frame ${state.releaseFrame} (${t}s)`;
-    document.getElementById('release-value').classList.add('set');
+
+    // Update badge
+    const badge = document.getElementById('release-badge');
+    badge.textContent = `Release: F${state.releaseFrame} (${t}s)`;
+    badge.classList.remove('hidden');
+
+    // Update button
     document.getElementById('btn-release').classList.add('active');
-    updateDiff();
+    document.getElementById('btn-release').textContent = `Release: Frame ${state.releaseFrame} (${t}s) — press R to re-mark`;
+
+    // Jump ahead and show Phase 2
+    const jumpSec = parseFloat(document.getElementById('jump-input').value) || 0.6;
+    const jumpFrames = Math.round(jumpSec * state.fps);
+    const targetFrame = Math.min(state.releaseFrame + jumpFrames, state.totalFrames - 1);
+
+    state.stripStart = targetFrame;
+    state.stumpsFrame = null;
+    hideSpeedOverlay();
+
+    document.getElementById('phase2').classList.remove('hidden');
+    renderStrip();
+
+    // Also jump the main view
+    browseSeek(targetFrame);
 }
 
-function markStumps() {
-    state.stumpsFrame = state.currentFrame;
-    const t = (state.stumpsFrame / state.fps).toFixed(2);
-    document.getElementById('stumps-value').textContent = `Frame ${state.stumpsFrame} (${t}s)`;
-    document.getElementById('stumps-value').classList.add('set');
-    document.getElementById('btn-stumps').classList.add('active');
-    updateDiff();
-}
+// ── Phase 2: Thumbnail Strip ──
 
-function updateDiff() {
-    if (state.releaseFrame !== null && state.stumpsFrame !== null) {
-        const diff = state.stumpsFrame - state.releaseFrame;
-        const t = (diff / state.fps).toFixed(4);
-        document.getElementById('diff-value').textContent = `${diff} frames (${t}s)`;
-        document.getElementById('diff-value').classList.add('set');
-        document.getElementById('btn-calc').disabled = false;
+function renderStrip() {
+    const strip = document.getElementById('thumb-strip');
+    strip.innerHTML = '';
+
+    for (let i = 0; i < state.batchSize; i++) {
+        const frameNum = state.stripStart + i;
+        if (frameNum >= state.totalFrames) break;
+
+        const div = document.createElement('div');
+        div.className = 'thumb';
+        if (state.stumpsFrame === frameNum) div.classList.add('selected');
+        div.onclick = () => selectStumpsFrame(frameNum);
+
+        const img = document.createElement('img');
+        img.src = `/video-frame/${state.sessionId}/${frameNum}`;
+        img.alt = `F${frameNum}`;
+
+        const lbl = document.createElement('div');
+        lbl.className = 'thumb-label';
+        lbl.textContent = `F${frameNum}`;
+
+        div.appendChild(img);
+        div.appendChild(lbl);
+        strip.appendChild(div);
     }
 }
 
-function clearMarks() {
-    state.releaseFrame = null;
-    state.stumpsFrame = null;
-    document.getElementById('release-value').textContent = '\\u2014';
-    document.getElementById('release-value').classList.remove('set');
-    document.getElementById('stumps-value').textContent = '\\u2014';
-    document.getElementById('stumps-value').classList.remove('set');
-    document.getElementById('diff-value').textContent = '\\u2014';
-    document.getElementById('diff-value').classList.remove('set');
-    document.getElementById('btn-release').classList.remove('active');
-    document.getElementById('btn-stumps').classList.remove('active');
-    document.getElementById('btn-calc').disabled = true;
-    document.getElementById('speed-result').classList.add('hidden');
+function shiftStrip(delta) {
+    state.stripStart = Math.max(0, Math.min(state.stripStart + delta, state.totalFrames - 1));
+    renderStrip();
 }
 
-// ── Speed Calculation ──
+function selectStumpsFrame(frameNum) {
+    state.stumpsFrame = frameNum;
+
+    // Highlight in strip
+    renderStrip();
+
+    // Jump main view to this frame
+    browseSeek(frameNum);
+
+    // Calculate speed instantly
+    calcSpeed();
+}
+
+function updateBatchSize() {
+    state.batchSize = parseInt(document.getElementById('batch-input').value) || 5;
+    if (state.releaseFrame !== null) renderStrip();
+}
+
+// ── Speed Calculation + Overlay ──
 
 async function calcSpeed() {
     if (state.releaseFrame === null || state.stumpsFrame === null) return;
 
     const distance = parseFloat(document.getElementById('distance-input').value);
-    if (!distance || distance <= 0) { alert('Enter a valid distance'); return; }
+    if (!distance || distance <= 0) return;
+
+    const adj = parseFloat(document.getElementById('adj-input').value) || RELEASE_ADJ_DEFAULT;
 
     const params = new URLSearchParams({
         release_frame: state.releaseFrame,
@@ -849,27 +1052,90 @@ async function calcSpeed() {
         fps: state.fps,
         gate: 'custom',
         custom_distance: distance,
+        release_adj: adj,
     });
 
     const res = await fetch(`/calculate-speed?${params}`, { method: 'POST' });
     const data = await res.json();
+    if (data.error) return;
 
-    if (data.error) { alert(data.error); return; }
+    const releaseKph = (data.speed_kph * adj).toFixed(1);
+    const releaseMph = (data.speed_mph * adj).toFixed(1);
 
-    document.getElementById('speed-kph').textContent = data.speed_kph;
-    document.getElementById('speed-mph').textContent = data.speed_mph;
-    document.getElementById('speed-detail').textContent =
-        `${data.distance_m}m in ${data.time_s}s | ${data.frame_diff} frames @ ${state.fps}fps | \\u00B1${data.error_kph} kph`;
-    document.getElementById('speed-result').classList.remove('hidden');
+    // Speed overlay on frame
+    const ov = document.getElementById('speed-overlay');
+    document.getElementById('ov-delivery').textContent = data.speed_kph;
+    document.getElementById('ov-release').textContent = `~${releaseKph} km/h`;
+    document.getElementById('ov-mph').textContent = `${data.speed_mph} / ~${releaseMph} mph`;
+    document.getElementById('ov-detail').textContent =
+        `${data.distance_m}m | ${data.time_s}s | ${data.frame_diff}f @${Math.round(state.fps)}fps | \\u00B1${data.error_kph}`;
+    ov.style.display = 'block';
+
+    // Detail strip
+    const ds = document.getElementById('detail-strip');
+    ds.textContent = `Release F${state.releaseFrame} \\u2192 Stumps F${state.stumpsFrame} | ${data.frame_diff} frames | ${data.time_s}s | ${data.distance_m}m | \\u00B1${data.error_kph} kph`;
+    ds.style.display = 'block';
+
+    // Auto-save annotation
+    saveAnnotation(data, adj);
 }
 
-// ── Navigation ──
+async function saveAnnotation(speedData, adj) {
+    if (!state.filename) return;
+
+    const annotation = {
+        filename: state.filename,
+        release_frame: state.releaseFrame,
+        stumps_frame: state.stumpsFrame,
+        fps: state.fps,
+        distance_m: speedData.distance_m,
+        frame_diff: speedData.frame_diff,
+        time_s: speedData.time_s,
+        speed_kph: speedData.speed_kph,
+        speed_mph: speedData.speed_mph,
+        release_est_kph: speedData.release_est_kph,
+        release_est_mph: speedData.release_est_mph,
+        release_adj: adj,
+        error_kph: speedData.error_kph,
+        annotated_at: new Date().toISOString(),
+    };
+
+    try {
+        await fetch(`/annotation/${encodeURIComponent(state.filename)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(annotation),
+        });
+        const ss = document.getElementById('save-status');
+        ss.textContent = `Annotation saved (${speedData.speed_kph} kph)`;
+        ss.classList.add('show');
+        setTimeout(() => ss.classList.remove('show'), 2000);
+    } catch (e) { console.error('Save failed:', e); }
+}
+
+function hideSpeedOverlay() {
+    document.getElementById('speed-overlay').style.display = 'none';
+    document.getElementById('detail-strip').style.display = 'none';
+}
+
+// ── Clear / Reset ──
+
+function clearAll() {
+    state.releaseFrame = null;
+    state.stumpsFrame = null;
+
+    document.getElementById('btn-release').classList.remove('active');
+    document.getElementById('btn-release').textContent = 'Mark Release (R)';
+    document.getElementById('release-badge').classList.add('hidden');
+    document.getElementById('phase2').classList.add('hidden');
+    hideSpeedOverlay();
+}
 
 function resetToUpload() {
     if (state.playing) { clearInterval(state.playTimer); state.playing = false; }
     state.sessionId = null;
-    clearMarks();
-    document.getElementById('step-browse').classList.add('hidden');
+    clearAll();
+    document.getElementById('step-measure').classList.add('hidden');
     document.getElementById('step-upload').classList.remove('hidden');
     loadSamples();
 }
@@ -878,14 +1144,13 @@ function resetToUpload() {
 
 document.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
-    if (document.getElementById('step-browse').classList.contains('hidden')) return;
+    if (document.getElementById('step-measure').classList.contains('hidden')) return;
 
     switch (e.key) {
         case 'ArrowLeft':  e.preventDefault(); browseStep(e.shiftKey ? -10 : -1); break;
         case 'ArrowRight': e.preventDefault(); browseStep(e.shiftKey ? 10 : 1); break;
         case 'r': case 'R': markRelease(); break;
-        case 's': case 'S': markStumps(); break;
-        case 'c': case 'C': clearMarks(); break;
+        case 'c': case 'C': clearAll(); break;
         case ' ': e.preventDefault(); togglePlay(); break;
     }
 });

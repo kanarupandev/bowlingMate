@@ -144,3 +144,56 @@ Miss the stumps? No speed. Rewards accuracy.
 - Rewards bowling accuracy alongside speed
 - Distance is known and fixed (crease to stumps)
 - Wall/net/custom distance available as alternatives via distance field
+
+## D5: On-device stump detection — Hybrid YOLO + Frame Diff (locked)
+
+**Date:** 2026-03-20
+
+**Two tasks, two approaches:**
+
+### Task A: Stump Localization (once per session)
+**Options:**
+1. Gemini API call (current) — works but network-dependent, slow
+2. YOLO11n CoreML — 5-8ms on Neural Engine, offline, 3-4MB model
+3. Apple Vision VNDetectRectangles — stumps aren't rectangles, unreliable
+4. Manual tap — fallback, always works
+
+**Decision:** Option 2 (YOLO11n) with Option 4 as fallback
+
+**Training data:** Cardiff stumps dataset (844 images) + 200-500 own samples + augmentation → ~3000 total
+
+### Task B: Disturbance Detection (every frame, real-time)
+**Options:**
+1. ML classifier per frame — can't run at 240fps (5-8ms > 4.17ms budget)
+2. Frame differencing on stump ROI — < 0.1ms per frame, 40x headroom
+3. Audio spike — rejected (outdoor noise, distance, tennis ball quiet)
+
+**Decision:** Option 2 — Frame differencing on stump ROI. No ML needed.
+
+**Algorithm:** `|frame[n] - frame[n-1]|` on stump ROI pixels → motion energy → spike = stumps hit
+
+**Rationale:**
+- ML would learn exactly what frame-diff detects — no benefit, adds complexity
+- Frame diff is deterministic — same video always gives same result
+- Existing `SpeedEstimationService.computeMotionEnergy` already does this math
+- Battery/thermal cost of Neural Engine at 240fps is prohibitive
+
+## D6: Annotation-driven development — Manual ground truth first (locked)
+
+**Date:** 2026-03-20
+
+**Decision:** Build annotation dataset of ~50 clips before automating.
+
+**Process:**
+1. Manual frame annotation via web tool → stored as JSON per video
+2. Each annotation: release frame, stumps-hit frame, distance, speed, fps
+3. Use this as ground truth to validate ML approaches
+4. Compare 5-10 ML setups against ground truth, pick the best
+5. Only then deploy on-device
+
+**Rationale:**
+- Fulltrack.ai measurements are unreliable — can't use as ground truth
+- No public speed-annotated bowling dataset exists
+- Manual annotation is 100% accurate
+- 50 clips is enough to validate and compare approaches
+- The annotation tool IS the data collection pipeline
